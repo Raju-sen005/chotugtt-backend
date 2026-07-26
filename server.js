@@ -14,7 +14,7 @@ const orderRoutes = require('./routes/orderRoutes'); // <-- NEW Route
 const adminRoutes = require('./routes/adminRoutes'); // Nayi file banayein
 const analyticsRoutes = require('./routes/analyticsRoutes')
 const offerRoutes = require("./routes/offerRoutes");
-const tableRoutes = require("./routes/tableRoutes"); 
+const tableRoutes = require("./routes/Tableroutes"); 
 dotenv.config();
 connectDB();
 
