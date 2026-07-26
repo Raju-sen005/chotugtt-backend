@@ -6,7 +6,7 @@ const {
   getAdminTableList,
   addAdminTable,
   removeAdminTable,
-} = require("../controllers/tableController");
+} = require("../controllers/Tablecontroller");
 const { protect, authorize } = require("../middleware/auth");
 const tenantContext = require("../middleware/tenant");
 
