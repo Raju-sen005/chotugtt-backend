@@ -80,7 +80,7 @@ const generateReadableOrderId = async (restaurantId) => {
     const counter = await Counter.findOneAndUpdate(
       { restaurantId, date: dateStr },
       { $inc: { seq: 1 } },
-      { new: true, upsert: true, setOnInsert: { seq: 1 } }
+      { new: true, upsert: true, setOnInsert: { seq: 1 } },
     );
 
     const sequenceNumber = String(counter.seq).padStart(3, "0");
@@ -131,6 +131,7 @@ exports.placeOrder = async (req, res) => {
     );
 
     if (tablesInvolved.length) {
+      // 1. Check karein ki kya is table par pehle se koi active/accepted/pending order hai
       const existingOrder = await Order.findOne({
         restaurantId,
         status: { $in: ["ACCEPTED", "PENDING"] },
@@ -141,13 +142,31 @@ exports.placeOrder = async (req, res) => {
       });
 
       if (existingOrder) {
-        const clashedTable = tablesInvolved.includes(existingOrder.tableNumber)
-          ? existingOrder.tableNumber
-          : tablesInvolved.find((t) => (existingOrder.mergedTables || []).includes(t));
+        // 🚀 APPEND LOGIC: Naya order banane ki bajay items ko existing order mein push karein
+        existingOrder.items.push(...items);
+        existingOrder.subtotal =
+          Number(existingOrder.subtotal) + Number(subtotal);
+        existingOrder.tax = Number(existingOrder.tax || 0) + Number(tax || 0);
+        existingOrder.total = Number(existingOrder.total) + Number(total);
 
-        return res.status(400).json({
-          success: false,
-          message: `Table ${clashedTable} is already occupied. Please bill it first.`,
+        await existingOrder.save();
+
+        const io = getIO();
+        // 1. UI update ke liye
+        io.to(restaurantId.toString()).emit(
+          "ORDER_STATUS_UPDATED",
+          existingOrder,
+        );
+        // 2. 🔔 Sound alert ke liye alag se event emit karein
+        io.to(restaurantId.toString()).emit(
+          "PLAY_NOTIFICATION_SOUND",
+          existingOrder,
+        );
+
+        return res.status(200).json({
+          success: true,
+          message: "Items added to your running order successfully!",
+          order: existingOrder,
         });
       }
     }
@@ -162,6 +181,7 @@ exports.placeOrder = async (req, res) => {
       });
     }
 
+    // 2. Agar table khali hai, tabhi naya unique order banega
     const uniqueOrderId = await generateReadableOrderId(restaurantId);
 
     const newOrder = await Order.create({
@@ -202,7 +222,7 @@ exports.updateOrderStatus = async (req, res) => {
       _id: req.params.id,
       restaurantId: req.user.restaurantId,
     }).populate("restaurantId");
-    
+
     if (!order)
       return res
         .status(404)
@@ -280,7 +300,9 @@ exports.completeOrder = async (req, res) => {
     );
 
     if (!order) {
-      return res.status(404).json({ success: false, message: "Order not found" });
+      return res
+        .status(404)
+        .json({ success: false, message: "Order not found" });
     }
 
     const io = getIO();
