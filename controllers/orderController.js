@@ -1,5 +1,5 @@
 const Order = require("../models/Order");
-const Counter = require("../models/Counter"); // 👈 Counter model import karein
+const Counter = require("../models/Counter");
 const { getIO } = require("../services/socketService");
 const axios = require("axios");
 const mongoose = require("mongoose");
@@ -26,7 +26,6 @@ const sendOfficialWhatsAppNotification = async (
       return;
     }
 
-    // Hit standard Meta endpoint
     const response = await axios.post(
       `https://graph.facebook.com/v25.0/${PHONE_NUMBER_ID}/messages`,
       {
@@ -34,16 +33,16 @@ const sendOfficialWhatsAppNotification = async (
         to: formattedPhone,
         type: "template",
         template: {
-          name: "order_rejection_alert", // Tumhara naya professional template
+          name: "order_rejection_alert",
           language: { code: "en_US" },
           components: [
             {
               type: "body",
               parameters: [
-                { type: "text", text: customerName }, // {{1}}
-                { type: "text", text: orderId }, // {{2}}
-                { type: "text", text: restaurantName }, // {{3}} 👈 Naya dynamic variable attach ho gaya
-                { type: "text", text: rejectReason || "High order volume" }, // {{4}}
+                { type: "text", text: customerName },
+                { type: "text", text: orderId },
+                { type: "text", text: restaurantName },
+                { type: "text", text: rejectReason || "High order volume" },
               ],
             },
           ],
@@ -70,18 +69,14 @@ const sendOfficialWhatsAppNotification = async (
   }
 };
 
-// Helper to compile incremental algorithmic daily tokens (#RS-0001)
-// 🚀 100% Safe Sequential Order ID Generator (Resets daily per restaurant and prevents duplicate key clashes)
-
 const generateReadableOrderId = async (restaurantId) => {
   try {
     const now = new Date();
     const yy = String(now.getFullYear()).slice(-2);
     const mm = String(now.getMonth() + 1).padStart(2, "0");
     const dd = String(now.getDate()).padStart(2, "0");
-    const dateStr = `${yy}${mm}${dd}`; // e.g., "260726"
+    const dateStr = `${yy}${mm}${dd}`;
 
-    // ⚡ ATOMIC OPERATION: Agar counter nahi hai toh create karega, hai toh securely seq ko +1 kar dega
     const counter = await Counter.findOneAndUpdate(
       { restaurantId, date: dateStr },
       { $inc: { seq: 1 } },
@@ -89,7 +84,7 @@ const generateReadableOrderId = async (restaurantId) => {
     );
 
     const sequenceNumber = String(counter.seq).padStart(3, "0");
-    return `#${dateStr}-${sequenceNumber}`; // Output: #260726-001, #260726-002...
+    return `#${dateStr}-${sequenceNumber}`;
   } catch (error) {
     console.error("❌ Order ID Generation Error:", error.message);
     const randomFallback = Math.floor(1000 + Math.random() * 9000);
@@ -97,11 +92,10 @@ const generateReadableOrderId = async (restaurantId) => {
   }
 };
 
-// Utility update
 const decodeTableToken = (token) => {
   try {
     const decoded = atob(token);
-    if (!decoded.includes("-TABLE-")) return "N/A"; // Security check
+    if (!decoded.includes("-TABLE-")) return "N/A";
     return decoded.split("-TABLE-")[1];
   } catch (e) {
     return "N/A";
@@ -122,25 +116,20 @@ exports.placeOrder = async (req, res) => {
       tax,
       total,
       deliveryAddress,
-      tableToken, // 💡 Yahan token receive hoga
-      mergeWithTable, // 💡 Customer ne dusri table select ki (merge-picker se)
+      tableToken,
+      mergeWithTable,
     } = req.body;
 
-    // Token se table number decode karein
     const decodedTable = decodeTableToken(tableToken);
     const cleanMergeTable =
       mergeWithTable && String(mergeWithTable).trim()
         ? String(mergeWithTable).trim()
         : null;
 
-    // 🔑 Merge ho ya na ho — sabhi tables jo is order se "occupy" hongi
     const tablesInvolved = [decodedTable, cleanMergeTable].filter(
       (t) => t && t !== "N/A",
     );
 
-    // ✅ Order CREATE karne se PEHLE check karein — ab primary table ke
-    // saath-saath merge-target table aur kisi bhi existing order ki
-    // mergedTables list ke against bhi check hota hai
     if (tablesInvolved.length) {
       const existingOrder = await Order.findOne({
         restaurantId,
@@ -181,8 +170,8 @@ exports.placeOrder = async (req, res) => {
       customerName,
       customerPhone,
       orderType,
-      tableNumber: decodedTable || "N/A", // 💡 Decoded value use karein
-      mergedTables: cleanMergeTable ? [cleanMergeTable] : [], // 💡 merge ki gayi table(s)
+      tableNumber: decodedTable || "N/A",
+      mergedTables: cleanMergeTable ? [cleanMergeTable] : [],
       deliveryAddress: deliveryAddress || "",
       items,
       subtotal: Number(subtotal),
@@ -209,11 +198,11 @@ exports.updateOrderStatus = async (req, res) => {
   try {
     const { status, rejectReason } = req.body;
 
-    // 💡 Added .populate() to safely pull restaurant details from MongoDB
     const order = await Order.findOne({
       _id: req.params.id,
       restaurantId: req.user.restaurantId,
     }).populate("restaurantId");
+    
     if (!order)
       return res
         .status(404)
@@ -226,7 +215,6 @@ exports.updateOrderStatus = async (req, res) => {
 
     await order.save();
 
-    // Broadcast updated status directly to the customer tracker channel room
     const io = getIO();
     io.to(order._id.toString()).emit("ORDER_STATUS_UPDATED", {
       orderId: order.orderId,
@@ -234,17 +222,11 @@ exports.updateOrderStatus = async (req, res) => {
       rejectReason: order.rejectReason,
     });
 
-    // ⚡ CALLING THE NEW 4-VARIABLE HANDLER
     if (
       status &&
       (status.toUpperCase() === "REJECTED" ||
         status.toUpperCase() === "DECLINED")
     ) {
-      console.log(
-        `🎯 Professional Rejection pipeline active for order ${order.orderId}...`,
-      );
-
-      // 💡 Safely extracts the dynamic restaurant name from populated data
       const currentRestaurantName =
         order.restaurantId && order.restaurantId.name
           ? order.restaurantId.name
@@ -254,7 +236,7 @@ exports.updateOrderStatus = async (req, res) => {
         order.customerPhone,
         order.customerName,
         order.orderId,
-        currentRestaurantName, // Live dynamic name goes to {{3}}
+        currentRestaurantName,
         order.rejectReason || "High order volume",
       );
     }
@@ -269,22 +251,14 @@ exports.updateOrderStatus = async (req, res) => {
   }
 };
 
-// @desc    Get Tenant specific active/pending/completed dashboard items lists for TODAY ONLY
+// @desc    Get Tenant specific active/pending dashboard orders (Unbilled orders will persist across days until cleared)
 // @route   GET /api/v1/orders/live
 exports.getLiveAdminOrders = async (req, res) => {
   try {
-    const startOfToday = new Date();
-    startOfToday.setHours(0, 0, 0, 0);
-
-    const endOfToday = new Date();
-    endOfToday.setHours(23, 59, 59, 999);
-
+    // 🔑 Date restriction hata di gayi hai taaki unbilled orders tab tak dikhein jab tak bill generate na ho
     const liveOrders = await Order.find({
       restaurantId: req.user.restaurantId,
-      createdAt: {
-        $gte: startOfToday,
-        $lte: endOfToday,
-      },
+      status: { $in: ["PENDING", "ACCEPTED"] }, // Sirf active/unbilled orders aayenge
     }).sort({ createdAt: -1 });
 
     res
@@ -305,7 +279,10 @@ exports.completeOrder = async (req, res) => {
       { new: true },
     );
 
-    // Broadcast to dashboard to update UI
+    if (!order) {
+      return res.status(404).json({ success: false, message: "Order not found" });
+    }
+
     const io = getIO();
     io.to(order.restaurantId.toString()).emit("ORDER_STATUS_UPDATED", order);
 
@@ -322,7 +299,6 @@ exports.getBillingStats = async (req, res) => {
 
     let startDate = new Date();
 
-    // Time calculations
     if (filter === "today") {
       startDate.setHours(0, 0, 0, 0);
     } else if (filter === "week") {
@@ -333,10 +309,9 @@ exports.getBillingStats = async (req, res) => {
       startDate.setFullYear(startDate.getFullYear() - 1);
     }
 
-    // Database Query
     const bills = await Order.find({
       restaurantId: rId,
-      status: "COMPLETED", // Match this with your status string
+      status: "COMPLETED",
       createdAt: { $gte: startDate },
     }).sort({ createdAt: -1 });
 

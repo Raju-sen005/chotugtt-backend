@@ -1,4 +1,5 @@
 const express = require('express');
+const path = require('path');
 const http = require('http'); // <-- NEW Core HTTP Module
 const dotenv = require('dotenv');
 const cookieParser = require('cookie-parser');
@@ -23,7 +24,7 @@ const server = http.createServer(app); // <-- Attach express application to Nati
 
 // Initialize Socket.io cluster layer context injection mapping
 initSocket(server);
-
+app.use('/uploads', express.static(path.join(__dirname, 'public/uploads')));
 app.use(cors({ 
   origin: "https://chotu-frontend-ngph.onrender.com", // Aapka frontend ka exact URL
   // origin: "http://localhost:5173", // Aapka frontend ka exact URL
