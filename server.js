@@ -25,8 +25,8 @@ const server = http.createServer(app); // <-- Attach express application to Nati
 initSocket(server);
 
 app.use(cors({ 
-  // origin: "https://chotu-frontend-ngph.onrender.com", // Aapka frontend ka exact URL
-  origin: "http://localhost:5173", // Aapka frontend ka exact URL
+  origin: "https://chotu-frontend-ngph.onrender.com", // Aapka frontend ka exact URL
+  // origin: "http://localhost:5173", // Aapka frontend ka exact URL
   credentials: true,
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
   allowedHeaders: ["Content-Type", "Authorization"]
