@@ -7,7 +7,7 @@ const orderSchema = new mongoose.Schema(
       ref: "Restaurant",
       required: true,
     },
-    orderId: { type: String, required: true, unique: true }, // Short readable order tracking code (e.g., #RA-102)
+    orderId: { type: String, required: true }, // Short readable order tracking code (e.g., #RA-102)
     customerName: { type: String, required: true, trim: true },
     customerPhone: { type: String, required: true },
     orderType: {
@@ -34,6 +34,7 @@ const orderSchema = new mongoose.Schema(
     },
     // Add inside orderSchema
     tableNumber: { type: String, default: "N/A" },
+    mergedTables: { type: [String], default: [] }, // 🔑 customer-side table-merge feature — other table(s) billed together with this order
     rejectReason: { type: String, default: "" },
   },
   { timestamps: true },
@@ -43,6 +44,14 @@ const orderSchema = new mongoose.Schema(
 orderSchema.index({ createdAt: 1 }, { expireAfterSeconds: 31536000 });
 // Optimize indexes for the live tracker dashboard and background aggregation analytical flows
 orderSchema.index({ restaurantId: 1, status: 1, createdAt: -1 });
-orderSchema.index({ orderId: 1 }, { unique: true });
+orderSchema.index(
+  {
+    restaurantId: 1,
+    orderId: 1,
+  },
+  {
+    unique: true,
+  }
+);
 
 module.exports = mongoose.model("Order", orderSchema);

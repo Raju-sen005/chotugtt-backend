@@ -1,4 +1,5 @@
 const Order = require("../models/Order");
+const Counter = require("../models/Counter"); // 👈 Counter model import karein
 const { getIO } = require("../services/socketService");
 const axios = require("axios");
 const mongoose = require("mongoose");
@@ -70,28 +71,27 @@ const sendOfficialWhatsAppNotification = async (
 };
 
 // Helper to compile incremental algorithmic daily tokens (#RS-0001)
-// 🚀 100% Safe Sequential Order ID Generator (Resets daily per restaurant)
+// 🚀 100% Safe Sequential Order ID Generator (Resets daily per restaurant and prevents duplicate key clashes)
+
 const generateReadableOrderId = async (restaurantId) => {
   try {
-    const startOfToday = new Date();
-    startOfToday.setHours(0, 0, 0, 0);
-
-    const countToday = await Order.countDocuments({
-      restaurantId: restaurantId,
-      createdAt: { $gte: startOfToday },
-    });
-
-    // Current date nikal lein (YYMMDD format mein, e.g., 260721)
     const now = new Date();
     const yy = String(now.getFullYear()).slice(-2);
     const mm = String(now.getMonth() + 1).padStart(2, "0");
     const dd = String(now.getDate()).padStart(2, "0");
-    const dateStr = `${yy}${mm}${dd}`;
+    const dateStr = `${yy}${mm}${dd}`; // e.g., "260726"
 
-    const sequenceNumber = (countToday + 1).toString().padStart(3, "0");
-    
-    return `#${dateStr}-${sequenceNumber}`; // Output example: #260721-001
+    // ⚡ ATOMIC OPERATION: Agar counter nahi hai toh create karega, hai toh securely seq ko +1 kar dega
+    const counter = await Counter.findOneAndUpdate(
+      { restaurantId, date: dateStr },
+      { $inc: { seq: 1 } },
+      { new: true, upsert: true, setOnInsert: { seq: 1 } }
+    );
+
+    const sequenceNumber = String(counter.seq).padStart(3, "0");
+    return `#${dateStr}-${sequenceNumber}`; // Output: #260726-001, #260726-002...
   } catch (error) {
+    console.error("❌ Order ID Generation Error:", error.message);
     const randomFallback = Math.floor(1000 + Math.random() * 9000);
     return `#ORD-${randomFallback}`;
   }
@@ -123,23 +123,42 @@ exports.placeOrder = async (req, res) => {
       total,
       deliveryAddress,
       tableToken, // 💡 Yahan token receive hoga
+      mergeWithTable, // 💡 Customer ne dusri table select ki (merge-picker se)
     } = req.body;
 
     // Token se table number decode karein
     const decodedTable = decodeTableToken(tableToken);
+    const cleanMergeTable =
+      mergeWithTable && String(mergeWithTable).trim()
+        ? String(mergeWithTable).trim()
+        : null;
 
-    // ✅ Order CREATE karne se PEHLE check karein
-    if (decodedTable !== "N/A") {
+    // 🔑 Merge ho ya na ho — sabhi tables jo is order se "occupy" hongi
+    const tablesInvolved = [decodedTable, cleanMergeTable].filter(
+      (t) => t && t !== "N/A",
+    );
+
+    // ✅ Order CREATE karne se PEHLE check karein — ab primary table ke
+    // saath-saath merge-target table aur kisi bhi existing order ki
+    // mergedTables list ke against bhi check hota hai
+    if (tablesInvolved.length) {
       const existingOrder = await Order.findOne({
         restaurantId,
-        tableNumber: decodedTable,
         status: { $in: ["ACCEPTED", "PENDING"] },
+        $or: [
+          { tableNumber: { $in: tablesInvolved } },
+          { mergedTables: { $in: tablesInvolved } },
+        ],
       });
 
       if (existingOrder) {
+        const clashedTable = tablesInvolved.includes(existingOrder.tableNumber)
+          ? existingOrder.tableNumber
+          : tablesInvolved.find((t) => (existingOrder.mergedTables || []).includes(t));
+
         return res.status(400).json({
           success: false,
-          message: `Table ${decodedTable} is already occupied. Please bill it first.`,
+          message: `Table ${clashedTable} is already occupied. Please bill it first.`,
         });
       }
     }
@@ -163,6 +182,7 @@ exports.placeOrder = async (req, res) => {
       customerPhone,
       orderType,
       tableNumber: decodedTable || "N/A", // 💡 Decoded value use karein
+      mergedTables: cleanMergeTable ? [cleanMergeTable] : [], // 💡 merge ki gayi table(s)
       deliveryAddress: deliveryAddress || "",
       items,
       subtotal: Number(subtotal),

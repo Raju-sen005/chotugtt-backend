@@ -1,0 +1,160 @@
+const mongoose = require("mongoose");
+const Order = require("../models/Order");
+const Table = require("../models/Table");
+
+// @desc    Konse tables abhi free hain (customer merge-picker ke liye) — public
+// @route   GET /tables/public/:restaurantId
+exports.getPublicFreeTables = async (req, res) => {
+  try {
+    const { restaurantId } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(restaurantId)) {
+      return res.status(400).json({ success: false, message: "Invalid restaurant ID" });
+    }
+
+    const allTables = await Table.find({ restaurantId, isActive: true })
+      .select("tableNumber")
+      .lean();
+
+    // Active order ki tableNumber + mergedTables sab occupied maane jaate hain
+    const activeOrders = await Order.find({
+      restaurantId,
+      status: { $in: ["PENDING", "ACCEPTED"] },
+    }).select("tableNumber mergedTables");
+
+    const occupiedSet = new Set();
+    activeOrders.forEach((o) => {
+      if (o.tableNumber && o.tableNumber !== "N/A") occupiedSet.add(String(o.tableNumber));
+      (o.mergedTables || []).forEach((t) => occupiedSet.add(String(t)));
+    });
+
+    const freeTables = allTables
+      .map((t) => t.tableNumber)
+      .filter((num) => !occupiedSet.has(String(num)));
+
+    res.status(200).json({ success: true, data: freeTables });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// @desc    Sabhi tables ki live status (free/occupied + kisne occupy kiya) — admin dashboard
+// @route   GET /tables/status
+exports.getTableStatusForAdmin = async (req, res) => {
+  try {
+    const restaurantId = req.user.restaurantId;
+
+    const allTables = await Table.find({ restaurantId, isActive: true })
+      .select("tableNumber")
+      .sort({ createdAt: 1 })
+      .lean();
+
+    const activeOrders = await Order.find({
+      restaurantId,
+      status: { $in: ["PENDING", "ACCEPTED"] },
+    }).select("tableNumber mergedTables orderId customerName");
+
+    const occupiedMap = {};
+    activeOrders.forEach((o) => {
+      const involvedTables = [o.tableNumber, ...(o.mergedTables || [])].filter(
+        (t) => t && t !== "N/A",
+      );
+      involvedTables.forEach((t) => {
+        occupiedMap[String(t)] = {
+          orderId: o.orderId,
+          customerName: o.customerName,
+          mergedWith: involvedTables.filter((x) => String(x) !== String(t)),
+        };
+      });
+    });
+
+    const status = allTables.map((t) => ({
+      tableNumber: t.tableNumber,
+      isOccupied: !!occupiedMap[String(t.tableNumber)],
+      occupiedBy: occupiedMap[String(t.tableNumber)] || null,
+    }));
+
+    res.status(200).json({ success: true, data: status });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// @desc    Admin ke table list ko fetch karna (StoreSettings load pe)
+// @route   GET /tables/admin
+exports.getAdminTableList = async (req, res) => {
+  try {
+    const tables = await Table.find({
+      restaurantId: req.user.restaurantId,
+      isActive: true,
+    })
+      .select("tableNumber")
+      .sort({ createdAt: 1 })
+      .lean();
+
+    res.status(200).json({ success: true, data: tables.map((t) => t.tableNumber) });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// @desc    Naya table add karna
+// @route   POST /tables/admin   body: { tableNumber }
+exports.addAdminTable = async (req, res) => {
+  try {
+    const { tableNumber } = req.body;
+    if (!tableNumber || !String(tableNumber).trim()) {
+      return res.status(400).json({ success: false, message: "tableNumber is required" });
+    }
+
+    const clean = String(tableNumber).trim();
+    const restaurantId = req.user.restaurantId;
+
+    // Agar pehle se soft-deleted table isi number ki ho, to use reactivate karo
+    // (naya document banane se unique index clash hoga)
+    const existing = await Table.findOne({ restaurantId, tableNumber: clean });
+    if (existing) {
+      if (!existing.isActive) {
+        existing.isActive = true;
+        await existing.save();
+      }
+    } else {
+      await Table.create({ restaurantId, tableNumber: clean });
+    }
+
+    const tables = await Table.find({ restaurantId, isActive: true })
+      .select("tableNumber")
+      .sort({ createdAt: 1 })
+      .lean();
+
+    res.status(200).json({ success: true, data: tables.map((t) => t.tableNumber) });
+  } catch (error) {
+    if (error.code === 11000) {
+      return res.status(400).json({ success: false, message: "This table already exists" });
+    }
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// @desc    Table remove karna (soft delete — history/orders intact rehte hain)
+// @route   DELETE /tables/admin/:tableNumber
+exports.removeAdminTable = async (req, res) => {
+  try {
+    const { tableNumber } = req.params;
+    const restaurantId = req.user.restaurantId;
+
+    await Table.findOneAndUpdate(
+      { restaurantId, tableNumber: String(tableNumber) },
+      { isActive: false },
+    );
+
+    const tables = await Table.find({ restaurantId, isActive: true })
+      .select("tableNumber")
+      .sort({ createdAt: 1 })
+      .lean();
+
+    res.status(200).json({ success: true, data: tables.map((t) => t.tableNumber) });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};

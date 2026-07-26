@@ -14,6 +14,7 @@ const orderRoutes = require('./routes/orderRoutes'); // <-- NEW Route
 const adminRoutes = require('./routes/adminRoutes'); // Nayi file banayein
 const analyticsRoutes = require('./routes/analyticsRoutes')
 const offerRoutes = require("./routes/offerRoutes");
+const tableRoutes = require("./routes/tableRoutes"); 
 dotenv.config();
 connectDB();
 
@@ -24,8 +25,8 @@ const server = http.createServer(app); // <-- Attach express application to Nati
 initSocket(server);
 
 app.use(cors({ 
-  origin: "https://chotu-frontend-ngph.onrender.com", // Aapka frontend ka exact URL
-  // origin: "http://localhost:5173", // Aapka frontend ka exact URL
+  // origin: "https://chotu-frontend-ngph.onrender.com", // Aapka frontend ka exact URL
+  origin: "http://localhost:5173", // Aapka frontend ka exact URL
   credentials: true,
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
   allowedHeaders: ["Content-Type", "Authorization"]
@@ -39,6 +40,7 @@ app.use('/menu', menuRoutes);
 app.use('/orders', orderRoutes); // <-- NEW MOUNT INTERFACE
 app.use('/analytics', analyticsRoutes)
 app.use("/offers", offerRoutes);
+app.use("/tables", tableRoutes); 
 app.use('/admin', protect, restrictTo('SUPERADMIN'), adminRoutes);
 
 const PORT = process.env.PORT || 5000;
