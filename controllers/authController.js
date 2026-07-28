@@ -1,6 +1,7 @@
 const Restaurant = require("../models/Restaurant");
 const User = require("../models/User");
 const jwt = require("jsonwebtoken");
+const cloudinary = require("../config/cloudinary"); // Cloudinary configuration import karein
 
 const generateTokenAndSetCookie = (res, userId) => {
   const token = jwt.sign({ id: userId }, process.env.JWT_SECRET, {
@@ -19,12 +20,34 @@ const generateTokenAndSetCookie = (res, userId) => {
 
 // @desc    Register a new Restaurant (Tenant) & Owner
 // @route   POST /api/v1/auth/register
+// @desc    Register a new Restaurant (Tenant) & Owner
+// @route   POST /api/v1/auth/register
 exports.registerTenant = async (req, res) => {
   const { restaurantName, slug, name, email, password, phone } = req.body;
-
+  console.log("REQ.FILE:", req.file); // Yeh check karne ke liye ki multer file utha raha hai ya nahi
+  console.log("REQ.BODY:", req.body);
   try {
+    // 1. Safe slug generation & validation
+    const finalSlug =
+      slug || restaurantName
+        ? (slug || restaurantName)
+            .trim()
+            .toLowerCase()
+            .replace(/[^a-z0-9]/g, "-")
+            .replace(/-+/g, "-")
+        : "";
+
+    if (!finalSlug) {
+      return res
+        .status(400)
+        .json({
+          success: false,
+          message: "Valid restaurant name or slug is required",
+        });
+    }
+
     // Check if slug is unique
-    const slugExists = await Restaurant.findOne({ slug: slug.toLowerCase() });
+    const slugExists = await Restaurant.findOne({ slug: finalSlug });
     if (slugExists)
       return res
         .status(400)
@@ -37,15 +60,24 @@ exports.registerTenant = async (req, res) => {
         .status(400)
         .json({ success: false, message: "Email already registered" });
 
-    // 1. Create Restaurant Profile
+    let logoUrl = "";
+
+    // 🖼️ Agar file aayi hai, toh local file ka path ya relative URL save karein
+    if (req.file) {
+      // Aap chahein toh pura path ya relative path save kar sakte hain (jaise: /uploads/filename.png)
+      logoUrl = `/uploads/${req.file.filename}`;
+    }
+
+    // 2. Create Restaurant Profile with Logo
     const restaurant = await Restaurant.create({
       name: restaurantName,
-      slug: slug.toLowerCase(),
+      slug: finalSlug,
       phone,
       email,
+      logo: logoUrl, // Cloudinary URL or empty string
     });
 
-    // 2. Create Owner Account linked to this Restaurant
+    // 3. Create Owner Account linked to this Restaurant
     const user = await User.create({
       restaurantId: restaurant._id,
       name,

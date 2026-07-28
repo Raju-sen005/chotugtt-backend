@@ -7,8 +7,9 @@ const {
   logout,
 } = require("../controllers/authController");
 const { protect } = require("../middleware/auth");
+const upload = require('../middleware/upload'); // Aapka multer config
 
-router.post("/register", registerTenant);
+router.post("/register", upload.single('logo'), registerTenant);
 router.post("/login", login);
 router.post("/logout", logout);
 router.post("/renew-subscription", renewSubscription); // Added route
