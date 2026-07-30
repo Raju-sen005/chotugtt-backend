@@ -115,24 +115,35 @@ exports.addAdminTable = async (req, res) => {
     const clean = String(tableNumber).trim();
     const restaurantId = req.user.restaurantId;
 
-    // Agar pehle se soft-deleted table isi number ki ho, to use reactivate karo
-    // (naya document banane se unique index clash hoga)
+    // Check karein ki kya ye table pehle se exist karti hai (chahe inactive ho)
     const existing = await Table.findOne({ restaurantId, tableNumber: clean });
+    
     if (existing) {
       if (!existing.isActive) {
+        // Agar soft-deleted thi, toh use active kar dein
         existing.isActive = true;
         await existing.save();
+      } else {
+        // Agar pehle se active hai, toh error bhej dein
+        return res.status(400).json({ success: false, message: "This table already exists" });
       }
     } else {
-      await Table.create({ restaurantId, tableNumber: clean });
+      // Nayi table create karein
+      await Table.create({ restaurantId, tableNumber: clean, isActive: true });
     }
 
+    // Sabhi active tables return karein
     const tables = await Table.find({ restaurantId, isActive: true })
-      .select("tableNumber")
+      .select("tableNumber isActive")
       .sort({ createdAt: 1 })
       .lean();
 
-    res.status(200).json({ success: true, data: tables.map((t) => t.tableNumber) });
+    const formattedTables = tables.map((t) => ({
+      tableNumber: t.tableNumber,
+      isDisabled: !t.isActive,
+    }));
+
+    res.status(200).json({ success: true, data: formattedTables });
   } catch (error) {
     if (error.code === 11000) {
       return res.status(400).json({ success: false, message: "This table already exists" });
@@ -148,17 +159,20 @@ exports.removeAdminTable = async (req, res) => {
     const { tableNumber } = req.params;
     const restaurantId = req.user.restaurantId;
 
-    await Table.findOneAndUpdate(
-      { restaurantId, tableNumber: String(tableNumber) },
-      { isActive: false },
-    );
+    // Hard delete taaki unique index ka issue na aaye
+    await Table.findOneAndDelete({ restaurantId, tableNumber: String(tableNumber) });
 
     const tables = await Table.find({ restaurantId, isActive: true })
-      .select("tableNumber")
+      .select("tableNumber isActive")
       .sort({ createdAt: 1 })
       .lean();
 
-    res.status(200).json({ success: true, data: tables.map((t) => t.tableNumber) });
+    const formattedTables = tables.map((t) => ({
+      tableNumber: t.tableNumber,
+      isDisabled: !t.isActive,
+    }));
+
+    res.status(200).json({ success: true, data: formattedTables });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
