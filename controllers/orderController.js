@@ -75,19 +75,22 @@ const generateReadableOrderId = async (restaurantId) => {
     const yy = String(now.getFullYear()).slice(-2);
     const mm = String(now.getMonth() + 1).padStart(2, "0");
     const dd = String(now.getDate()).padStart(2, "0");
-    const dateStr = `${yy}${mm}${dd}`;
+    const dateStr = `${yy}${mm}${dd}`; // e.g., "260730"
 
+    // Atomic increment per restaurant per day
     const counter = await Counter.findOneAndUpdate(
-      { restaurantId, date: dateStr },
+      { restaurantId: new mongoose.Types.ObjectId(restaurantId), date: dateStr },
       { $inc: { seq: 1 } },
-      { new: true, upsert: true, setOnInsert: { seq: 1 } },
+      { new: true, upsert: true, setOnInsert: { seq: 1 } }
     );
 
-    const sequenceNumber = String(counter.seq).padStart(3, "0");
+    // 🔑 6-Digit Padding (e.g., #260730-000001)
+    const sequenceNumber = String(counter.seq).padStart(6, "0");
     return `#${dateStr}-${sequenceNumber}`;
   } catch (error) {
     console.error("❌ Order ID Generation Error:", error.message);
-    const randomFallback = Math.floor(1000 + Math.random() * 9000);
+    // Fallback with high entropy random digits to prevent crash/duplicates
+    const randomFallback = Math.floor(100000 + Math.random() * 900000);
     return `#ORD-${randomFallback}`;
   }
 };

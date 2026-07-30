@@ -39,19 +39,13 @@ const orderSchema = new mongoose.Schema(
   },
   { timestamps: true },
 );
-// Order.js schema ke end mein ye line add karein
-// expireAfterSeconds: 31536000 (1 saal = 365 * 24 * 60 * 60 seconds)
 orderSchema.index({ createdAt: 1 }, { expireAfterSeconds: 31536000 });
-// Optimize indexes for the live tracker dashboard and background aggregation analytical flows
 orderSchema.index({ restaurantId: 1, status: 1, createdAt: -1 });
+
+// 🔑 CRITICAL FIX: Compound Unique Index scoped strictly per Restaurant
 orderSchema.index(
-  {
-    restaurantId: 1,
-    orderId: 1,
-  },
-  {
-    unique: true,
-  }
+  { restaurantId: 1, orderId: 1 },
+  { unique: true }
 );
 
 module.exports = mongoose.model("Order", orderSchema);
