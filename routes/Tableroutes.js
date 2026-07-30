@@ -5,6 +5,7 @@ const {
   getTableStatusForAdmin,
   getAdminTableList,
   addAdminTable,
+  toggleTableStatus,
   removeAdminTable,
 } = require("../controllers/Tablecontroller");
 const { protect, authorize } = require("../middleware/auth");
@@ -34,6 +35,13 @@ router.post(
   authorize("OWNER", "MANAGER", "STAFF"),
   tenantContext,
   addAdminTable,
+);
+router.patch(
+  "/admin/:tableNumber/toggle",
+  protect,
+  authorize("OWNER", "MANAGER", "STAFF"),
+  tenantContext,
+  toggleTableStatus, // 👈 Route add karein
 );
 router.delete(
   "/admin/:tableNumber",

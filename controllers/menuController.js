@@ -2,6 +2,7 @@ const MenuItem = require("../models/MenuItem");
 const Restaurant = require("../models/Restaurant");
 const Combo = require("../models/Combo");
 const Offer = require("../models/Offer");
+const Table = require("../models/Table");
 // const cloudinary = require('../config/cloudinary'); // Agar Cloudinary use kar rahe hain
 
 // --- ADMIN MENU ACTIONS ---
@@ -9,7 +10,7 @@ const Offer = require("../models/Offer");
 exports.createMenuItem = async (req, res) => {
   try {
     const { name, category, description, price } = req.body;
-    
+
     // Multer se aayi file ka URL/path yahan handle hoga (Example: Cloudinary ya local storage link)
     let imageUrl = "";
     if (req.file) {
@@ -25,7 +26,7 @@ exports.createMenuItem = async (req, res) => {
       price,
       image: imageUrl,
     });
-console.log("REQ FILE:", req.file)
+    console.log("REQ FILE:", req.file);
     res.status(201).json({ success: true, data: item });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -44,7 +45,7 @@ exports.getAdminMenuItems = async (req, res) => {
 exports.updateMenuItem = async (req, res) => {
   try {
     const updates = { ...req.body };
-    
+
     if (req.file) {
       updates.image = `/uploads/${req.file.filename}`; // Ya Cloudinary URL
     }
@@ -56,7 +57,9 @@ exports.updateMenuItem = async (req, res) => {
     );
 
     if (!item)
-      return res.status(404).json({ success: false, message: "Item not found in your catalog" });
+      return res
+        .status(404)
+        .json({ success: false, message: "Item not found in your catalog" });
     res.status(200).json({ success: true, data: item });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -70,8 +73,12 @@ exports.deleteMenuItem = async (req, res) => {
       restaurantId: req.user.restaurantId,
     });
     if (!item)
-      return res.status(404).json({ success: false, message: "Item not found" });
-    res.status(200).json({ success: true, message: "Menu item discarded successfully" });
+      return res
+        .status(404)
+        .json({ success: false, message: "Item not found" });
+    res
+      .status(200)
+      .json({ success: true, message: "Menu item discarded successfully" });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -82,7 +89,7 @@ exports.deleteMenuItem = async (req, res) => {
 exports.createCombo = async (req, res) => {
   try {
     const { name, description, items, price, discount } = req.body;
-    
+
     let imageUrl = "";
     if (req.file) {
       imageUrl = `/uploads/${req.file.filename}`;
@@ -92,14 +99,14 @@ exports.createCombo = async (req, res) => {
       restaurantId: req.user.restaurantId,
       name,
       description,
-      items: typeof items === 'string' ? JSON.parse(items) : items, // FormData parsing fix
+      items: typeof items === "string" ? JSON.parse(items) : items, // FormData parsing fix
       price,
       discount,
       category: "COMBO",
       image: imageUrl,
     });
     res.status(201).json({ success: true, data: combo });
-  } catch (error)  {
+  } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -116,7 +123,7 @@ exports.getAdminCombos = async (req, res) => {
 exports.updateCombo = async (req, res) => {
   try {
     const updates = { ...req.body };
-    if (updates.items && typeof updates.items === 'string') {
+    if (updates.items && typeof updates.items === "string") {
       updates.items = JSON.parse(updates.items);
     }
     if (req.file) {
@@ -129,7 +136,9 @@ exports.updateCombo = async (req, res) => {
       { new: true },
     );
     if (!combo)
-      return res.status(404).json({ success: false, message: "Combo not found" });
+      return res
+        .status(404)
+        .json({ success: false, message: "Combo not found" });
     res.status(200).json({ success: true, data: combo });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -143,8 +152,12 @@ exports.deleteCombo = async (req, res) => {
       restaurantId: req.user.restaurantId,
     });
     if (!combo)
-      return res.status(404).json({ success: false, message: "Combo not found" });
-    res.status(200).json({ success: true, message: "Combo discarded successfully" });
+      return res
+        .status(404)
+        .json({ success: false, message: "Combo not found" });
+    res
+      .status(200)
+      .json({ success: true, message: "Combo discarded successfully" });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -154,13 +167,57 @@ exports.deleteCombo = async (req, res) => {
 exports.getPublicCatalog = async (req, res) => {
   try {
     const { restaurantId } = req.params;
+    const tableToken = req.query.t;
     const [restaurant] = await Promise.all([Restaurant.findById(restaurantId)]);
 
     if (!restaurant) {
-      return res.status(404).json({ success: false, message: "Restaurant not found" });
+      return res
+        .status(404)
+        .json({ success: false, message: "Restaurant not found" });
     }
-    const activeItems = await MenuItem.find({ restaurantId, isAvailable: true });
-    const activeCombos = await Combo.find({ restaurantId, isAvailable: true }).populate("items", "name price image");
+    let tableNumber = null;
+
+    if (tableToken) {
+      try {
+        const decoded = Buffer.from(tableToken, "base64").toString("utf8");
+        tableNumber = decoded.split("-TABLE-")[1];
+      } catch (err) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid QR Code",
+        });
+      }
+    }
+
+    if (tableNumber) {
+      const table = await Table.findOne({
+        restaurantId,
+        tableNumber,
+      });
+
+      if (!table) {
+        return res.status(404).json({
+          success: false,
+          message: "Table not found",
+        });
+      }
+
+      if (!table.isActive) {
+        return res.status(403).json({
+          success: false,
+          code: "TABLE_DISABLED",
+          message: "This table is temporarily blocked.",
+        });
+      }
+    }
+    const activeItems = await MenuItem.find({
+      restaurantId,
+      isAvailable: true,
+    });
+    const activeCombos = await Combo.find({
+      restaurantId,
+      isAvailable: true,
+    }).populate("items", "name price image");
     const activeOffers = await Offer.find({ restaurantId, isActive: true });
 
     const groupedMenu = activeItems.reduce((acc, item) => {

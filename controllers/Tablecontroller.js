@@ -86,13 +86,18 @@ exports.getAdminTableList = async (req, res) => {
   try {
     const tables = await Table.find({
       restaurantId: req.user.restaurantId,
-      isActive: true,
     })
-      .select("tableNumber")
+      .select("tableNumber isActive")
       .sort({ createdAt: 1 })
       .lean();
 
-    res.status(200).json({ success: true, data: tables.map((t) => t.tableNumber) });
+    // Frontend ke format ke mutabiq map karein (isActive: true means isDisabled: false)
+    const formattedTables = tables.map((t) => ({
+      tableNumber: t.tableNumber,
+      isDisabled: !t.isActive,
+    }));
+
+    res.status(200).json({ success: true, data: formattedTables });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -154,6 +159,34 @@ exports.removeAdminTable = async (req, res) => {
       .lean();
 
     res.status(200).json({ success: true, data: tables.map((t) => t.tableNumber) });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+
+
+
+// @desc    Table ko enable ya disable (lock/unlock) karna
+// @route   PATCH /tables/admin/:tableNumber/toggle
+// @desc    Table ko enable ya disable (lock/unlock) karna
+// @route   PATCH /tables/admin/:tableNumber/toggle
+exports.toggleTableStatus = async (req, res) => {
+  try {
+    const { tableNumber } = req.params;
+    const { isDisabled } = req.body; // Frontend se isDisabled aa raha hai
+    const restaurantId = req.user.restaurantId;
+
+    const table = await Table.findOne({ restaurantId, tableNumber: String(tableNumber) });
+    if (!table) {
+      return res.status(404).json({ success: false, message: "Table not found" });
+    }
+
+    // Agar isDisabled true hai toh isActive false hoga, aur vice-versa
+    table.isActive = !isDisabled;
+    await table.save();
+
+    res.status(200).json({ success: true, message: "Table status updated", isActive: table.isActive });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
