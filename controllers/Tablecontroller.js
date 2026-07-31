@@ -205,3 +205,56 @@ exports.toggleTableStatus = async (req, res) => {
     res.status(500).json({ success: false, message: error.message });
   }
 };
+
+
+
+// @desc    Restaurant ki saari tables with live status fetch karna (Public / Captain POS ke liye)
+// @route   GET /tables/status/:restaurantId
+exports.getPublicTableStatus = async (req, res) => {
+  try {
+    const { restaurantId } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(restaurantId)) {
+      return res.status(400).json({ success: false, message: "Invalid restaurant ID" });
+    }
+
+    const allTables = await Table.find({ restaurantId, isActive: true })
+      .select("tableNumber")
+      .sort({ createdAt: 1 })
+      .lean();
+
+    const activeOrders = await Order.find({
+      restaurantId,
+      status: { $in: ["PENDING", "ACCEPTED"] },
+    }).select("tableNumber mergedTables orderId customerName");
+
+    const occupiedMap = {};
+    activeOrders.forEach((o) => {
+      const involvedTables = [o.tableNumber, ...(o.mergedTables || [])].filter(
+        (t) => t && t !== "N/A"
+      );
+      involvedTables.forEach((t) => {
+        occupiedMap[String(t)] = {
+          orderId: o.orderId,
+          customerName: o.customerName,
+          mergedWith: involvedTables.filter((x) => String(x) !== String(t)),
+        };
+      });
+    });
+
+    const status = allTables.map((t) => {
+      const tableName = String(t.tableNumber);
+      const isOcc = !!occupiedMap[tableName];
+      return {
+        tableNumber: t.tableNumber,
+        status: isOcc ? "Running" : "Available", // Captain POS ke format ke mutabiq
+        isOccupied: isOcc,
+        occupiedBy: occupiedMap[tableName] || null,
+      };
+    });
+
+    res.status(200).json({ success: true, data: status });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};

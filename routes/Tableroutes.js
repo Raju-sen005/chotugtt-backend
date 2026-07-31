@@ -4,6 +4,7 @@ const {
   getPublicFreeTables,
   getTableStatusForAdmin,
   getAdminTableList,
+  getPublicTableStatus,
   addAdminTable,
   toggleTableStatus,
   removeAdminTable,
@@ -13,7 +14,7 @@ const tenantContext = require("../middleware/tenant");
 
 // Public — customer-facing merge picker (same pattern as orderRoutes' /place)
 router.get("/public/:restaurantId", getPublicFreeTables);
-
+router.get("/status/:restaurantId", getPublicTableStatus); // 👈 Yeh naya route add karein
 // Admin — same auth chain as your other admin-isolated routes
 router.get(
   "/status",
