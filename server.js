@@ -25,14 +25,26 @@ const server = http.createServer(app); // <-- Attach express application to Nati
 // Initialize Socket.io cluster layer context injection mapping
 initSocket(server);
 app.use('/uploads', express.static(path.join(__dirname, 'public/uploads')));
-app.use(cors({ 
-  origin: "https://chotu-frontend-ngph.onrender.com", // Aapka frontend ka exact URL
-  // origin: "http://localhost:5173", // Aapka frontend ka exact URL
+const allowedOrigins = [
+  // "http://localhost:5174", // Captain app / Local frontend 1
+  // "http://localhost:5173", // Restaurant Admin panel / Local frontend 2 (agar ye port hai)
+  "https://chotu-frontend-ngph.onrender.com", // Production frontend URL (agar ho)
+  "https://captain-uw3o.onrender.com"
+];
+
+app.use(cors({
+  origin: function (origin, callback) {
+    // Postman ya server-to-server requests ke liye origin undefined ho sakta hai
+    if (!origin || allowedOrigins.indexOf(origin) !== -1) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
   credentials: true,
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
   allowedHeaders: ["Content-Type", "Authorization"]
-}));app.use(express.json());
-app.use(cookieParser());
+}));
 
 // Base API endpoints mounts
 app.use('/auth', authRoutes);
