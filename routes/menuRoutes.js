@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { 
   createMenuItem, getAdminMenuItems, updateMenuItem, deleteMenuItem, 
-  createCombo, getPublicCatalog, getAdminCombos, updateCombo, deleteCombo
+  createCombo, getPublicCatalog, getAdminCombos, updateCombo, deleteCombo,extractMenuFromImage
 } = require('../controllers/menuController');
 const { protect, authorize } = require('../middleware/auth');
 const tenantContext = require('../middleware/tenant');
@@ -23,6 +23,8 @@ router.route('/admin/items/:id')
 
 router.post('/admin/combos', upload.single('image'), createCombo); // 🔑 Combo ke liye bhi
 router.get('/admin/combos', getAdminCombos);
+
+router.post("/admin/menu/ai-extract", upload.single("image"), extractMenuFromImage);
 
 router.route('/admin/combos/:id')
   .patch(upload.single('image'), updateCombo)    // 🔑 Combo update ke liye bhi
