@@ -2,6 +2,7 @@ const express = require('express');
 const path = require('path');
 const http = require('http'); // <-- NEW Core HTTP Module
 const dotenv = require('dotenv');
+dotenv.config();
 const cookieParser = require('cookie-parser');
 const cors = require('cors');
 const connectDB = require('./config/db');
@@ -16,7 +17,8 @@ const adminRoutes = require('./routes/adminRoutes'); // Nayi file banayein
 const analyticsRoutes = require('./routes/analyticsRoutes')
 const offerRoutes = require("./routes/offerRoutes");
 const tableRoutes = require("./routes/Tableroutes"); 
-dotenv.config();
+const marketingRoutes = require('./routes/marketingRoutes');
+
 connectDB();
 
 const app = express();
@@ -24,11 +26,18 @@ const server = http.createServer(app); // <-- Attach express application to Nati
 
 // Initialize Socket.io cluster layer context injection mapping
 initSocket(server);
+
+// 🛠️ CRITICAL MIDDLEWARES (Inko routes se pehle lagana zaroori hai)
+app.use(express.json({ limit: '10mb' })); // Incoming JSON body read karne ke liye
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+app.use(cookieParser()); // 🍪 Incoming Cookies (jwt token) read karne ke liye
+
 app.use('/uploads', express.static(path.join(__dirname, 'public/uploads')));
+
 const allowedOrigins = [
   // "http://localhost:5174", // Captain app / Local frontend 1
-  // "http://localhost:5173", // Restaurant Admin panel / Local frontend 2 (agar ye port hai)
-  "https://chotu-frontend-ngph.onrender.com", // Production frontend URL (agar ho)
+  // "http://localhost:5173", // Restaurant Admin panel / Local frontend 2
+  "https://chotu-frontend-ngph.onrender.com", 
   "https://captain-uw3o.onrender.com"
 ];
 
@@ -51,9 +60,10 @@ app.use('/auth', authRoutes);
 app.use('/restaurant', restaurantRoutes);
 app.use('/menu', menuRoutes);
 app.use('/orders', orderRoutes); // <-- NEW MOUNT INTERFACE
-app.use('/analytics', analyticsRoutes)
+app.use('/analytics', analyticsRoutes);
 app.use("/offers", offerRoutes);
 app.use("/tables", tableRoutes); 
+app.use('/marketing', marketingRoutes);
 app.use('/admin', protect, restrictTo('SUPERADMIN'), adminRoutes);
 
 const PORT = process.env.PORT || 5000;
