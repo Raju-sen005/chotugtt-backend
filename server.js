@@ -8,17 +8,17 @@ const cors = require('cors');
 const connectDB = require('./config/db');
 const { initSocket } = require('./services/socketService'); // <-- NEW Socket Loader
 const { protect, restrictTo } = require('./middleware/auth'); // Path check kar lein
+
 // Load endpoints variants
 const authRoutes = require('./routes/authRoutes');
 const restaurantRoutes = require('./routes/restaurantRoutes');
 const menuRoutes = require('./routes/menuRoutes');
 const orderRoutes = require('./routes/orderRoutes'); // <-- NEW Route
 const adminRoutes = require('./routes/adminRoutes'); // Nayi file banayein
-const analyticsRoutes = require('./routes/analyticsRoutes')
+const analyticsRoutes = require('./routes/analyticsRoutes');
 const offerRoutes = require("./routes/offerRoutes");
 const tableRoutes = require("./routes/Tableroutes"); 
-const marketingRoutes = require('./routes/marketingRoutes');
-
+dotenv.config();
 connectDB();
 
 const app = express();
@@ -26,18 +26,12 @@ const server = http.createServer(app); // <-- Attach express application to Nati
 
 // Initialize Socket.io cluster layer context injection mapping
 initSocket(server);
-
-// 🛠️ CRITICAL MIDDLEWARES (Inko routes se pehle lagana zaroori hai)
-app.use(express.json({ limit: '10mb' })); // Incoming JSON body read karne ke liye
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
-app.use(cookieParser()); // 🍪 Incoming Cookies (jwt token) read karne ke liye
-
 app.use('/uploads', express.static(path.join(__dirname, 'public/uploads')));
 
 const allowedOrigins = [
   // "http://localhost:5174", // Captain app / Local frontend 1
-  // "http://localhost:5173", // Restaurant Admin panel / Local frontend 2
-  "https://chotu-frontend-ngph.onrender.com", 
+  // "http://localhost:5173", // Restaurant Admin panel / Local frontend 2 (agar ye port hai)
+  "https://chotu-frontend-ngph.onrender.com", // Production frontend URL (agar ho)
   "https://captain-uw3o.onrender.com"
 ];
 
