@@ -517,3 +517,77 @@ exports.getPreviousBillingStats = async (req, res) => {
     res.status(500).json({ success: false, message: err.message });
   }
 };
+
+
+
+// @desc    Move a running order from one table to another (customer changed seats)
+// @route   PATCH /api/v1/orders/:id/shift-table
+exports.shiftTableOrder = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { newTableNumber } = req.body;
+
+    if (!newTableNumber || !String(newTableNumber).trim()) {
+      return res.status(400).json({
+        success: false,
+        message: "New table number is required",
+      });
+    }
+
+    const cleanNewTable = String(newTableNumber).trim();
+
+    const order = await Order.findOne({
+      _id: id,
+      restaurantId: req.user.restaurantId,
+      status: { $in: ["PENDING", "ACCEPTED"] }, // sirf live orders shift ho sakte hain
+    });
+
+    if (!order) {
+      return res.status(404).json({
+        success: false,
+        message: "Active order not found for this table",
+      });
+    }
+
+    if (order.tableNumber === cleanNewTable) {
+      return res.status(400).json({
+        success: false,
+        message: "Order is already on this table",
+      });
+    }
+
+    // 🔑 Naye table pe pehle se koi active order na ho, warna clash ho jayega
+    const conflictOrder = await Order.findOne({
+      restaurantId: req.user.restaurantId,
+      status: { $in: ["PENDING", "ACCEPTED"] },
+      $or: [
+        { tableNumber: cleanNewTable },
+        { mergedTables: cleanNewTable },
+      ],
+    });
+
+    if (conflictOrder) {
+      return res.status(400).json({
+        success: false,
+        message: `Table ${cleanNewTable} already has a running order. Choose a free table.`,
+      });
+    }
+
+    const previousTable = order.tableNumber;
+    order.tableNumber = cleanNewTable;
+
+    await order.save();
+
+    const io = getIO();
+    io.to(order.restaurantId.toString()).emit("ORDER_STATUS_UPDATED", order);
+
+    res.status(200).json({
+      success: true,
+      message: `Order shifted from Table ${previousTable} to Table ${cleanNewTable}`,
+      data: order,
+    });
+  } catch (error) {
+    console.error("Shift Table Error:", error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};

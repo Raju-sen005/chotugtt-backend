@@ -52,7 +52,7 @@ exports.getTableStatusForAdmin = async (req, res) => {
     const activeOrders = await Order.find({
       restaurantId,
       status: { $in: ["PENDING", "ACCEPTED"] },
-    }).select("tableNumber mergedTables orderId customerName");
+    }).select("_id tableNumber mergedTables orderId customerName");
 
     const occupiedMap = {};
     activeOrders.forEach((o) => {
@@ -61,6 +61,8 @@ exports.getTableStatusForAdmin = async (req, res) => {
       );
       involvedTables.forEach((t) => {
         occupiedMap[String(t)] = {
+            orderMongoId: o._id,
+
           orderId: o.orderId,
           customerName: o.customerName,
           mergedWith: involvedTables.filter((x) => String(x) !== String(t)),
@@ -226,7 +228,7 @@ exports.getPublicTableStatus = async (req, res) => {
     const activeOrders = await Order.find({
       restaurantId,
       status: { $in: ["PENDING", "ACCEPTED"] },
-    }).select("tableNumber mergedTables orderId customerName");
+    }).select("_id tableNumber mergedTables orderId customerName");
 
     const occupiedMap = {};
     activeOrders.forEach((o) => {
@@ -235,6 +237,8 @@ exports.getPublicTableStatus = async (req, res) => {
       );
       involvedTables.forEach((t) => {
         occupiedMap[String(t)] = {
+            orderMongoId: o._id,
+
           orderId: o.orderId,
           customerName: o.customerName,
           mergedWith: involvedTables.filter((x) => String(x) !== String(t)),
