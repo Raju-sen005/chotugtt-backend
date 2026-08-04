@@ -6,6 +6,8 @@ const {
   getLiveAdminOrders,
   completeOrder,
   getBillingStats,
+  cancelOrderItem,
+  getPreviousBillingStats,
 } = require("../controllers/orderController");
 const { protect, authorize } = require("../middleware/auth");
 const tenantContext = require("../middleware/tenant");
@@ -14,11 +16,11 @@ const tenantContext = require("../middleware/tenant");
 router.post("/place", placeOrder);
 
 router.get(
-  "/billing", 
-  protect, 
-  authorize("OWNER", "MANAGER", "STAFF"), 
-  tenantContext, 
-  getBillingStats
+  "/billing",
+  protect,
+  authorize("OWNER", "MANAGER", "STAFF"),
+  tenantContext,
+  getBillingStats,
 );
 
 // Admin-isolated real-time state manipulation pipeline interfaces
@@ -46,4 +48,19 @@ router.patch(
   completeOrder,
 );
 
+router.patch(
+  "/:id/item/:itemId/cancel",
+  protect,
+  authorize("OWNER", "MANAGER", "STAFF"),
+  tenantContext,
+  cancelOrderItem,
+);
+
+router.get(
+  "/billing/previous", // 🆕
+  protect,
+  authorize("OWNER", "MANAGER", "STAFF"),
+  tenantContext,
+  getPreviousBillingStats,
+);
 module.exports = router;

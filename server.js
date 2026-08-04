@@ -18,15 +18,19 @@ const adminRoutes = require('./routes/adminRoutes'); // Nayi file banayein
 const analyticsRoutes = require('./routes/analyticsRoutes');
 const offerRoutes = require("./routes/offerRoutes");
 const tableRoutes = require("./routes/Tableroutes"); 
-dotenv.config();
+const marketingRoutes = require("./routes/marketingRoutes");
 connectDB();
 
 const app = express();
 const server = http.createServer(app); // <-- Attach express application to Native Server framework
-
 // Initialize Socket.io cluster layer context injection mapping
 initSocket(server);
 app.use('/uploads', express.static(path.join(__dirname, 'public/uploads')));
+app.use(cookieParser());
+
+// 👇 ADD THESE
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
 const allowedOrigins = [
   // "http://localhost:5174", // Captain app / Local frontend 1

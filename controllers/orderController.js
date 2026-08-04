@@ -79,9 +79,12 @@ const generateReadableOrderId = async (restaurantId) => {
 
     // Atomic increment per restaurant per day
     const counter = await Counter.findOneAndUpdate(
-      { restaurantId: new mongoose.Types.ObjectId(restaurantId), date: dateStr },
+      {
+        restaurantId: new mongoose.Types.ObjectId(restaurantId),
+        date: dateStr,
+      },
       { $inc: { seq: 1 } },
-      { new: true, upsert: true, setOnInsert: { seq: 1 } }
+      { new: true, upsert: true, setOnInsert: { seq: 1 } },
     );
 
     // 🔑 6-Digit Padding (e.g., #260730-000001)
@@ -116,6 +119,7 @@ exports.placeOrder = async (req, res) => {
       orderType,
       items,
       subtotal,
+      discount,
       tax,
       total,
       deliveryAddress,
@@ -149,8 +153,19 @@ exports.placeOrder = async (req, res) => {
         existingOrder.items.push(...items);
         existingOrder.subtotal =
           Number(existingOrder.subtotal) + Number(subtotal);
+        existingOrder.discount =
+          Number(existingOrder.discount || 0) + Number(discount || 0); // 🆕 FIX: discount bhi merge hona chahiye
         existingOrder.tax = Number(existingOrder.tax || 0) + Number(tax || 0);
         existingOrder.total = Number(existingOrder.total) + Number(total);
+
+        // 🔑 FIX: taxRate ko combined (dono orders milakar) totals se dobara calculate karo
+        // warna item-cancel karte waqt purana (sirf pehle order ka) taxRate use hoke total galat aayega
+        const combinedTaxableAmount =
+          existingOrder.subtotal - existingOrder.discount;
+        existingOrder.taxRate =
+          combinedTaxableAmount > 0
+            ? existingOrder.tax / combinedTaxableAmount
+            : 0;
 
         await existingOrder.save();
 
@@ -187,6 +202,10 @@ exports.placeOrder = async (req, res) => {
     // 2. Agar table khali hai, tabhi naya unique order banega
     const uniqueOrderId = await generateReadableOrderId(restaurantId);
 
+    // 🔑 FIX: taxRate ab discount ke baad ke taxable amount se calculate hoga
+    // (cancelOrderItem bhi taxableAmount = subtotal - discount use karta hai — formula match hona chahiye)
+    const taxableAmount = Number(subtotal) - (Number(discount) || 0);
+
     const newOrder = await Order.create({
       restaurantId,
       orderId: uniqueOrderId,
@@ -198,7 +217,9 @@ exports.placeOrder = async (req, res) => {
       deliveryAddress: deliveryAddress || "",
       items,
       subtotal: Number(subtotal),
+      discount: Number(discount) || 0,
       tax: Number(tax) || 0,
+      taxRate: taxableAmount > 0 ? (Number(tax) || 0) / taxableAmount : 0, // 🆕 FIX
       total: Number(total),
     });
 
@@ -341,6 +362,157 @@ exports.getBillingStats = async (req, res) => {
     }).sort({ createdAt: -1 });
 
     res.status(200).json({ success: true, data: bills });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// @desc    Cancel a single item within an order (out of stock etc.) — recalculates totals
+// @route   PATCH /api/v1/orders/:id/item/:itemId/cancel
+exports.cancelOrderItem = async (req, res) => {
+  try {
+    const { id, itemId } = req.params;
+
+    const order = await Order.findOne({
+      _id: id,
+      restaurantId: req.user.restaurantId,
+    });
+
+    if (!order) {
+      return res.status(404).json({
+        success: false,
+        message: "Order not found",
+      });
+    }
+
+    const item = order.items.id(itemId);
+
+    if (!item) {
+      return res.status(404).json({
+        success: false,
+        message: "Item not found in this order",
+      });
+    }
+
+    if (item.status === "REJECTED") {
+      return res.status(400).json({
+        success: false,
+        message: "Item already cancelled",
+      });
+    }
+
+    // At least one active item rehna chahiye
+    const activeItems = order.items.filter((i) => i.status !== "REJECTED");
+
+    if (activeItems.length <= 1) {
+      return res.status(400).json({
+        success: false,
+        message: "Can't cancel the only item. Reject the whole order instead.",
+      });
+    }
+
+    // Cancel item
+    item.status = "REJECTED";
+
+    // Remaining active items
+    const remainingItems = order.items.filter((i) => i.status !== "REJECTED");
+
+    // New Subtotal
+    const newSubtotal = remainingItems.reduce(
+      (sum, i) => sum + Number(i.price) * Number(i.quantity),
+      0,
+    );
+
+    // Previous discount ratio
+    const previousSubtotal = Number(order.subtotal || 0);
+    const previousDiscount = Number(order.discount || 0);
+
+    const discountRate =
+      previousSubtotal > 0 ? previousDiscount / previousSubtotal : 0;
+
+    const newDiscount = Number((newSubtotal * discountRate).toFixed(2));
+
+    // Tax after discount
+    const taxableAmount = Math.max(0, newSubtotal - newDiscount);
+
+    const newTax = Number(
+      (taxableAmount * Number(order.taxRate || 0)).toFixed(2),
+    );
+
+    const newTotal = Number((taxableAmount + newTax).toFixed(2));
+
+    // Update order
+    order.subtotal = newSubtotal;
+    order.discount = newDiscount;
+    order.tax = newTax;
+    order.total = newTotal;
+
+    await order.save();
+
+    const io = getIO();
+
+    io.to(order.restaurantId.toString()).emit("ORDER_STATUS_UPDATED", order);
+
+    return res.status(200).json({
+      success: true,
+      message: "Item cancelled successfully.",
+      data: order,
+    });
+  } catch (error) {
+    console.error("Cancel Item Error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+// @desc    Get revenue for the period *immediately before* the current filter window
+//          (used for profit/loss % comparison on the Payments page)
+// @route   GET /api/v1/orders/billing/previous
+exports.getPreviousBillingStats = async (req, res) => {
+  try {
+    const { filter } = req.query;
+    const rId = new mongoose.Types.ObjectId(req.user.restaurantId);
+
+    const now = new Date();
+    let currentStart = new Date();
+
+    if (filter === "today") {
+      currentStart.setHours(0, 0, 0, 0);
+    } else if (filter === "week") {
+      currentStart.setDate(currentStart.getDate() - 7);
+    } else if (filter === "month") {
+      currentStart.setMonth(currentStart.getMonth() - 1);
+    } else if (filter === "year") {
+      currentStart.setFullYear(currentStart.getFullYear() - 1);
+    } else {
+      currentStart.setHours(0, 0, 0, 0);
+    }
+
+    // 🔑 Current period ki exact length nikalo, phir usi length ka
+    // ek aur window turant currentStart se pehle le lo — that's "previous period"
+    const windowLength = now.getTime() - currentStart.getTime();
+    const previousEnd = currentStart;
+    const previousStart = new Date(currentStart.getTime() - windowLength);
+
+    const previousBills = await Order.find({
+      restaurantId: rId,
+      status: "COMPLETED",
+      createdAt: { $gte: previousStart, $lt: previousEnd },
+    });
+
+    const total = previousBills.reduce(
+      (sum, bill) => sum + (Number(bill.total) || 0),
+      0,
+    );
+
+    res.status(200).json({
+      success: true,
+      total,
+      count: previousBills.length,
+    });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
