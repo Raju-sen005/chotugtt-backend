@@ -1,6 +1,7 @@
 const mongoose = require("mongoose");
 const Order = require("../models/Order");
 const Table = require("../models/Table");
+const Section = require("../models/Section");
 
 // @desc    Konse tables abhi free hain (customer merge-picker ke liye) — public
 // @route   GET /tables/public/:restaurantId
@@ -16,7 +17,6 @@ exports.getPublicFreeTables = async (req, res) => {
       .select("tableNumber")
       .lean();
 
-    // Active order ki tableNumber + mergedTables sab occupied maane jaate hain
     const activeOrders = await Order.find({
       restaurantId,
       status: { $in: ["PENDING", "ACCEPTED"] },
@@ -45,7 +45,7 @@ exports.getTableStatusForAdmin = async (req, res) => {
     const restaurantId = req.user.restaurantId;
 
     const allTables = await Table.find({ restaurantId, isActive: true })
-      .select("tableNumber")
+      .select("tableNumber section")
       .sort({ createdAt: 1 })
       .lean();
 
@@ -61,8 +61,7 @@ exports.getTableStatusForAdmin = async (req, res) => {
       );
       involvedTables.forEach((t) => {
         occupiedMap[String(t)] = {
-            orderMongoId: o._id,
-
+          orderMongoId: o._id,
           orderId: o.orderId,
           customerName: o.customerName,
           mergedWith: involvedTables.filter((x) => String(x) !== String(t)),
@@ -72,6 +71,7 @@ exports.getTableStatusForAdmin = async (req, res) => {
 
     const status = allTables.map((t) => ({
       tableNumber: t.tableNumber,
+      section: t.section,
       isOccupied: !!occupiedMap[String(t.tableNumber)],
       occupiedBy: occupiedMap[String(t.tableNumber)] || null,
     }));
@@ -82,21 +82,21 @@ exports.getTableStatusForAdmin = async (req, res) => {
   }
 };
 
-// @desc    Admin ke table list ko fetch karna (StoreSettings load pe)
+// @desc    Admin ke table list ko fetch karna (StoreSettings load pe) — ab section-wise
 // @route   GET /tables/admin
 exports.getAdminTableList = async (req, res) => {
   try {
     const tables = await Table.find({
       restaurantId: req.user.restaurantId,
     })
-      .select("tableNumber isActive")
+      .select("tableNumber isActive section")
       .sort({ createdAt: 1 })
       .lean();
 
-    // Frontend ke format ke mutabiq map karein (isActive: true means isDisabled: false)
     const formattedTables = tables.map((t) => ({
       tableNumber: t.tableNumber,
       isDisabled: !t.isActive,
+      section: t.section || "General",
     }));
 
     res.status(200).json({ success: true, data: formattedTables });
@@ -105,73 +105,80 @@ exports.getAdminTableList = async (req, res) => {
   }
 };
 
-// @desc    Naya table add karna
-// @route   POST /tables/admin   body: { tableNumber }
+// @desc    Naya table add karna — custom naam + section ke saath
+// @route   POST /tables/admin   body: { tableNumber, section }
 exports.addAdminTable = async (req, res) => {
   try {
-    const { tableNumber } = req.body;
+    const { tableNumber, section } = req.body;
     if (!tableNumber || !String(tableNumber).trim()) {
       return res.status(400).json({ success: false, message: "tableNumber is required" });
     }
 
     const clean = String(tableNumber).trim();
+    const cleanSection = section && String(section).trim() ? String(section).trim() : "General";
     const restaurantId = req.user.restaurantId;
 
-    // Check karein ki kya ye table pehle se exist karti hai (chahe inactive ho)
     const existing = await Table.findOne({ restaurantId, tableNumber: clean });
-    
+
     if (existing) {
       if (!existing.isActive) {
-        // Agar soft-deleted thi, toh use active kar dein
+        // Agar soft-deleted/disabled thi, toh use active kar dein aur naya section apply kar dein
         existing.isActive = true;
+        existing.section = cleanSection;
         await existing.save();
       } else {
-        // Agar pehle se active hai, toh error bhej dein
-        return res.status(400).json({ success: false, message: "This table already exists" });
+        return res.status(400).json({ success: false, message: "This table name already exists" });
       }
     } else {
-      // Nayi table create karein
-      await Table.create({ restaurantId, tableNumber: clean, isActive: true });
+      await Table.create({ restaurantId, tableNumber: clean, section: cleanSection, isActive: true });
     }
 
-    // Sabhi active tables return karein
+    // 🔑 Agar yeh section pehli baar use ho raha hai, toh usko Section list mein bhi upsert kar dein
+    // taaki dropdown mein turant dikhe (chahe koi explicit "Create Section" na kiya ho)
+    await Section.findOneAndUpdate(
+      { restaurantId, name: cleanSection },
+      { $setOnInsert: { restaurantId, name: cleanSection, order: 0 } },
+      { upsert: true },
+    );
+
     const tables = await Table.find({ restaurantId, isActive: true })
-      .select("tableNumber isActive")
+      .select("tableNumber isActive section")
       .sort({ createdAt: 1 })
       .lean();
 
     const formattedTables = tables.map((t) => ({
       tableNumber: t.tableNumber,
       isDisabled: !t.isActive,
+      section: t.section || "General",
     }));
 
     res.status(200).json({ success: true, data: formattedTables });
   } catch (error) {
     if (error.code === 11000) {
-      return res.status(400).json({ success: false, message: "This table already exists" });
+      return res.status(400).json({ success: false, message: "This table name already exists" });
     }
     res.status(500).json({ success: false, message: error.message });
   }
 };
 
-// @desc    Table remove karna (soft delete — history/orders intact rehte hain)
+// @desc    Table remove karna (hard delete — history/orders tableNumber string se hi linked rehte hain)
 // @route   DELETE /tables/admin/:tableNumber
 exports.removeAdminTable = async (req, res) => {
   try {
     const { tableNumber } = req.params;
     const restaurantId = req.user.restaurantId;
 
-    // Hard delete taaki unique index ka issue na aaye
     await Table.findOneAndDelete({ restaurantId, tableNumber: String(tableNumber) });
 
     const tables = await Table.find({ restaurantId, isActive: true })
-      .select("tableNumber isActive")
+      .select("tableNumber isActive section")
       .sort({ createdAt: 1 })
       .lean();
 
     const formattedTables = tables.map((t) => ({
       tableNumber: t.tableNumber,
       isDisabled: !t.isActive,
+      section: t.section || "General",
     }));
 
     res.status(200).json({ success: true, data: formattedTables });
@@ -180,17 +187,12 @@ exports.removeAdminTable = async (req, res) => {
   }
 };
 
-
-
-
-// @desc    Table ko enable ya disable (lock/unlock) karna
-// @route   PATCH /tables/admin/:tableNumber/toggle
 // @desc    Table ko enable ya disable (lock/unlock) karna
 // @route   PATCH /tables/admin/:tableNumber/toggle
 exports.toggleTableStatus = async (req, res) => {
   try {
     const { tableNumber } = req.params;
-    const { isDisabled } = req.body; // Frontend se isDisabled aa raha hai
+    const { isDisabled } = req.body;
     const restaurantId = req.user.restaurantId;
 
     const table = await Table.findOne({ restaurantId, tableNumber: String(tableNumber) });
@@ -198,7 +200,6 @@ exports.toggleTableStatus = async (req, res) => {
       return res.status(404).json({ success: false, message: "Table not found" });
     }
 
-    // Agar isDisabled true hai toh isActive false hoga, aur vice-versa
     table.isActive = !isDisabled;
     await table.save();
 
@@ -208,7 +209,38 @@ exports.toggleTableStatus = async (req, res) => {
   }
 };
 
+// @desc    Table ka section badalna (drag/move to another section)
+// @route   PATCH /tables/admin/:tableNumber/section   body: { section }
+exports.moveTableSection = async (req, res) => {
+  try {
+    const { tableNumber } = req.params;
+    const { section } = req.body;
+    const restaurantId = req.user.restaurantId;
 
+    if (!section || !String(section).trim()) {
+      return res.status(400).json({ success: false, message: "section is required" });
+    }
+    const cleanSection = String(section).trim();
+
+    const table = await Table.findOne({ restaurantId, tableNumber: String(tableNumber) });
+    if (!table) {
+      return res.status(404).json({ success: false, message: "Table not found" });
+    }
+
+    table.section = cleanSection;
+    await table.save();
+
+    await Section.findOneAndUpdate(
+      { restaurantId, name: cleanSection },
+      { $setOnInsert: { restaurantId, name: cleanSection, order: 0 } },
+      { upsert: true },
+    );
+
+    res.status(200).json({ success: true, message: "Table moved", section: table.section });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
 
 // @desc    Restaurant ki saari tables with live status fetch karna (Public / Captain POS ke liye)
 // @route   GET /tables/status/:restaurantId
@@ -221,7 +253,7 @@ exports.getPublicTableStatus = async (req, res) => {
     }
 
     const allTables = await Table.find({ restaurantId, isActive: true })
-      .select("tableNumber")
+      .select("tableNumber section")
       .sort({ createdAt: 1 })
       .lean();
 
@@ -237,8 +269,7 @@ exports.getPublicTableStatus = async (req, res) => {
       );
       involvedTables.forEach((t) => {
         occupiedMap[String(t)] = {
-            orderMongoId: o._id,
-
+          orderMongoId: o._id,
           orderId: o.orderId,
           customerName: o.customerName,
           mergedWith: involvedTables.filter((x) => String(x) !== String(t)),
@@ -251,7 +282,8 @@ exports.getPublicTableStatus = async (req, res) => {
       const isOcc = !!occupiedMap[tableName];
       return {
         tableNumber: t.tableNumber,
-        status: isOcc ? "Running" : "Available", // Captain POS ke format ke mutabiq
+        section: t.section,
+        status: isOcc ? "Running" : "Available",
         isOccupied: isOcc,
         occupiedBy: occupiedMap[tableName] || null,
       };

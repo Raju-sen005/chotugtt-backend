@@ -5,69 +5,69 @@ const axios = require("axios");
 const mongoose = require("mongoose");
 
 // 🚀 1. PROFESSIONAL DYNAMIC WHATSAPP HANDLER (4 VARIABLES)
-const sendOfficialWhatsAppNotification = async (
-  customerPhone,
-  customerName,
-  orderId,
-  restaurantName,
-  rejectReason,
-) => {
-  try {
-    let formattedPhone = customerPhone.replace(/\D/g, "");
-    if (!formattedPhone.startsWith("91")) {
-      formattedPhone = `91${formattedPhone}`;
-    }
+// const sendOfficialWhatsAppNotification = async (
+//   customerPhone,
+//   customerName,
+//   orderId,
+//   restaurantName,
+//   rejectReason,
+// ) => {
+//   try {
+//     let formattedPhone = customerPhone.replace(/\D/g, "");
+//     if (!formattedPhone.startsWith("91")) {
+//       formattedPhone = `91${formattedPhone}`;
+//     }
 
-    const WHATSAPP_TOKEN = process.env.META_WHATSAPP_TOKEN;
-    const PHONE_NUMBER_ID = process.env.META_PHONE_NUMBER_ID;
+//     const WHATSAPP_TOKEN = process.env.META_WHATSAPP_TOKEN;
+//     const PHONE_NUMBER_ID = process.env.META_PHONE_NUMBER_ID;
 
-    if (!WHATSAPP_TOKEN || !PHONE_NUMBER_ID) {
-      console.log("⚠️ Env configuration variables are missing.");
-      return;
-    }
+//     if (!WHATSAPP_TOKEN || !PHONE_NUMBER_ID) {
+//       console.log("⚠️ Env configuration variables are missing.");
+//       return;
+//     }
 
-    const response = await axios.post(
-      `https://graph.facebook.com/v25.0/${PHONE_NUMBER_ID}/messages`,
-      {
-        messaging_product: "whatsapp",
-        to: formattedPhone,
-        type: "template",
-        template: {
-          name: "order_rejection_alert",
-          language: { code: "en_US" },
-          components: [
-            {
-              type: "body",
-              parameters: [
-                { type: "text", text: customerName },
-                { type: "text", text: orderId },
-                { type: "text", text: restaurantName },
-                { type: "text", text: rejectReason || "High order volume" },
-              ],
-            },
-          ],
-        },
-      },
-      {
-        headers: {
-          Authorization: `Bearer ${WHATSAPP_TOKEN}`,
-          "Content-Type": "application/json",
-        },
-      },
-    );
+//     const response = await axios.post(
+//       `https://graph.facebook.com/v25.0/${PHONE_NUMBER_ID}/messages`,
+//       {
+//         messaging_product: "whatsapp",
+//         to: formattedPhone,
+//         type: "template",
+//         template: {
+//           name: "order_rejection_alert",
+//           language: { code: "en_US" },
+//           components: [
+//             {
+//               type: "body",
+//               parameters: [
+//                 { type: "text", text: customerName },
+//                 { type: "text", text: orderId },
+//                 { type: "text", text: restaurantName },
+//                 { type: "text", text: rejectReason || "High order volume" },
+//               ],
+//             },
+//           ],
+//         },
+//       },
+//       {
+//         headers: {
+//           Authorization: `Bearer ${WHATSAPP_TOKEN}`,
+//           "Content-Type": "application/json",
+//         },
+//       },
+//     );
 
-    if (response.status === 200 || response.status === 201) {
-      console.log(
-        `🚀 Professional Notification successfully fired to: ${formattedPhone}`,
-      );
-    }
-  } catch (error) {
-    console.error(
-      "❌ Meta API Core Pipeline Error:",
-      error.response?.data || error.message,
-    );
-  }
-};
+//     if (response.status === 200 || response.status === 201) {
+//       console.log(
+//         `🚀 Professional Notification successfully fired to: ${formattedPhone}`,
+//       );
+//     }
+//   } catch (error) {
+//     console.error(
+//       "❌ Meta API Core Pipeline Error:",
+//       error.response?.data || error.message,
+//     );
+//   }
+// };
 
 const generateReadableOrderId = async (restaurantId) => {
   try {
@@ -266,24 +266,24 @@ exports.updateOrderStatus = async (req, res) => {
       rejectReason: order.rejectReason,
     });
 
-    if (
-      status &&
-      (status.toUpperCase() === "REJECTED" ||
-        status.toUpperCase() === "DECLINED")
-    ) {
-      const currentRestaurantName =
-        order.restaurantId && order.restaurantId.name
-          ? order.restaurantId.name
-          : "Our Kitchen";
+    // if (
+    //   status &&
+    //   (status.toUpperCase() === "REJECTED" ||
+    //     status.toUpperCase() === "DECLINED")
+    // ) {
+    //   const currentRestaurantName =
+    //     order.restaurantId && order.restaurantId.name
+    //       ? order.restaurantId.name
+    //       : "Our Kitchen";
 
-      sendOfficialWhatsAppNotification(
-        order.customerPhone,
-        order.customerName,
-        order.orderId,
-        currentRestaurantName,
-        order.rejectReason || "High order volume",
-      );
-    }
+    //   sendOfficialWhatsAppNotification(
+    //     order.customerPhone,
+    //     order.customerName,
+    //     order.orderId,
+    //     currentRestaurantName,
+    //     order.rejectReason || "High order volume",
+    //   );
+    // }
 
     res.status(200).json({
       success: true,
@@ -518,8 +518,6 @@ exports.getPreviousBillingStats = async (req, res) => {
   }
 };
 
-
-
 // @desc    Move a running order from one table to another (customer changed seats)
 // @route   PATCH /api/v1/orders/:id/shift-table
 exports.shiftTableOrder = async (req, res) => {
@@ -560,10 +558,7 @@ exports.shiftTableOrder = async (req, res) => {
     const conflictOrder = await Order.findOne({
       restaurantId: req.user.restaurantId,
       status: { $in: ["PENDING", "ACCEPTED"] },
-      $or: [
-        { tableNumber: cleanNewTable },
-        { mergedTables: cleanNewTable },
-      ],
+      $or: [{ tableNumber: cleanNewTable }, { mergedTables: cleanNewTable }],
     });
 
     if (conflictOrder) {

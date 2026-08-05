@@ -9,7 +9,7 @@ const orderSchema = new mongoose.Schema(
     },
     orderId: { type: String, required: true }, // Short readable order tracking code (e.g., #RA-102)
     customerName: { type: String, required: true, trim: true },
-    customerPhone: { type: String, required: true },
+    customerPhone: { type: String, default: "" },
     orderType: {
       type: String,
       enum: ["DINE_IN", "TAKEAWAY", "DELIVERY"],
