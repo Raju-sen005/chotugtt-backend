@@ -4,71 +4,6 @@ const { getIO } = require("../services/socketService");
 const axios = require("axios");
 const mongoose = require("mongoose");
 
-// 🚀 1. PROFESSIONAL DYNAMIC WHATSAPP HANDLER (4 VARIABLES)
-// const sendOfficialWhatsAppNotification = async (
-//   customerPhone,
-//   customerName,
-//   orderId,
-//   restaurantName,
-//   rejectReason,
-// ) => {
-//   try {
-//     let formattedPhone = customerPhone.replace(/\D/g, "");
-//     if (!formattedPhone.startsWith("91")) {
-//       formattedPhone = `91${formattedPhone}`;
-//     }
-
-//     const WHATSAPP_TOKEN = process.env.META_WHATSAPP_TOKEN;
-//     const PHONE_NUMBER_ID = process.env.META_PHONE_NUMBER_ID;
-
-//     if (!WHATSAPP_TOKEN || !PHONE_NUMBER_ID) {
-//       console.log("⚠️ Env configuration variables are missing.");
-//       return;
-//     }
-
-//     const response = await axios.post(
-//       `https://graph.facebook.com/v25.0/${PHONE_NUMBER_ID}/messages`,
-//       {
-//         messaging_product: "whatsapp",
-//         to: formattedPhone,
-//         type: "template",
-//         template: {
-//           name: "order_rejection_alert",
-//           language: { code: "en_US" },
-//           components: [
-//             {
-//               type: "body",
-//               parameters: [
-//                 { type: "text", text: customerName },
-//                 { type: "text", text: orderId },
-//                 { type: "text", text: restaurantName },
-//                 { type: "text", text: rejectReason || "High order volume" },
-//               ],
-//             },
-//           ],
-//         },
-//       },
-//       {
-//         headers: {
-//           Authorization: `Bearer ${WHATSAPP_TOKEN}`,
-//           "Content-Type": "application/json",
-//         },
-//       },
-//     );
-
-//     if (response.status === 200 || response.status === 201) {
-//       console.log(
-//         `🚀 Professional Notification successfully fired to: ${formattedPhone}`,
-//       );
-//     }
-//   } catch (error) {
-//     console.error(
-//       "❌ Meta API Core Pipeline Error:",
-//       error.response?.data || error.message,
-//     );
-//   }
-// };
-
 const generateReadableOrderId = async (restaurantId) => {
   try {
     const now = new Date();
@@ -236,6 +171,126 @@ exports.placeOrder = async (req, res) => {
   }
 };
 
+// @desc    Owner placing counter order (Parcel or Append to Table)
+// @route   POST /api/v1/orders/counter-place
+exports.placeCounterOrder = async (req, res) => {
+  try {
+    // 🔑 restaurantId req.user se lein agar req.body mein na ho
+    const restaurantId = req.body.restaurantId || req.user?.restaurantId;
+    const {
+      orderType,
+      items,
+      subtotal,
+      discount,
+      tax,
+      total,
+      targetTableNumber,
+    } = req.body;
+
+    if (!restaurantId) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Restaurant ID is required" });
+    }
+
+    // 1. Agar targetTableNumber diya hai (Dine-in counter item addition)
+    if (orderType === "DINE_IN_COUNTER" && targetTableNumber) {
+      const cleanTable = String(targetTableNumber).trim();
+
+      const existingOrder = await Order.findOne({
+        restaurantId,
+        status: { $in: ["ACCEPTED", "PENDING"] },
+        $or: [{ tableNumber: cleanTable }, { mergedTables: cleanTable }],
+      });
+
+      if (existingOrder) {
+        // Map frontend items to match schema requirements if necessary
+        const formattedItems = items.map((i) => ({
+          itemId: i.menuItem || i.combo || i.itemId,
+          itemType: i.catalogType === "COMBO" ? "COMBO" : "SINGLE",
+          name: i.name,
+          price: i.price,
+          quantity: i.quantity,
+          itemModel: i.itemModel || "MenuItem",
+        }));
+
+        existingOrder.items.push(...formattedItems);
+        existingOrder.subtotal =
+          Number(existingOrder.subtotal) + Number(subtotal);
+        existingOrder.discount =
+          Number(existingOrder.discount || 0) + Number(discount || 0);
+        existingOrder.tax = Number(existingOrder.tax || 0) + Number(tax || 0);
+
+        const combinedTaxable = existingOrder.subtotal - existingOrder.discount;
+        existingOrder.taxRate =
+          combinedTaxable > 0 ? existingOrder.tax / combinedTaxable : 0;
+        existingOrder.total = Number(existingOrder.total) + Number(total);
+
+        await existingOrder.save();
+
+        const io = getIO();
+        io.to(restaurantId.toString()).emit(
+          "ORDER_STATUS_UPDATED",
+          existingOrder,
+        );
+        io.to(restaurantId.toString()).emit(
+          "PLAY_NOTIFICATION_SOUND",
+          existingOrder,
+        );
+
+        return res.status(200).json({
+          success: true,
+          message: `Items successfully added to Table ${cleanTable}!`,
+          order: existingOrder,
+        });
+      } else {
+        return res.status(404).json({
+          success: false,
+          message: `Table ${cleanTable} par koi active order nahi mila!`,
+        });
+      }
+    }
+
+    // 2. Format items for Parcel / New Counter Order
+    const formattedItems = items.map((i) => ({
+      itemId: i.menuItem || i.combo || i.itemId,
+      itemType: i.catalogType === "COMBO" ? "COMBO" : "SINGLE",
+      name: i.name,
+      price: i.price,
+      quantity: i.quantity,
+      itemModel: i.itemModel || "MenuItem",
+    }));
+
+    const uniqueOrderId = await generateReadableOrderId(restaurantId);
+    const taxableAmount = Number(subtotal) - (Number(discount) || 0);
+
+    const newOrder = await Order.create({
+      restaurantId,
+      orderId: uniqueOrderId,
+      customerName: "Counter Parcel",
+      customerPhone: "",
+      orderType: "TAKEAWAY", // 🔑 Schema-compatible enum value (change to match your Order schema's enum)
+      tableNumber: "PARCEL",
+      items: formattedItems,
+      subtotal: Number(subtotal),
+      discount: Number(discount) || 0,
+      tax: Number(tax) || 0,
+      taxRate: taxableAmount > 0 ? (Number(tax) || 0) / taxableAmount : 0,
+      total: Number(total),
+      status: "COMPLETED",
+    });
+
+    res.status(201).json({
+      success: true,
+      message: "Parcel order generated successfully!",
+      order: newOrder,
+    });
+  } catch (error) {
+    console.error("Counter Order Error:", error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 // @desc    Admin transitioning live status configurations
 // @route   PATCH /api/v1/orders/:id/status
 exports.updateOrderStatus = async (req, res) => {
@@ -265,25 +320,6 @@ exports.updateOrderStatus = async (req, res) => {
       status: order.status,
       rejectReason: order.rejectReason,
     });
-
-    // if (
-    //   status &&
-    //   (status.toUpperCase() === "REJECTED" ||
-    //     status.toUpperCase() === "DECLINED")
-    // ) {
-    //   const currentRestaurantName =
-    //     order.restaurantId && order.restaurantId.name
-    //       ? order.restaurantId.name
-    //       : "Our Kitchen";
-
-    //   sendOfficialWhatsAppNotification(
-    //     order.customerPhone,
-    //     order.customerName,
-    //     order.orderId,
-    //     currentRestaurantName,
-    //     order.rejectReason || "High order volume",
-    //   );
-    // }
 
     res.status(200).json({
       success: true,

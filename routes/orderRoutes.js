@@ -2,6 +2,7 @@ const express = require("express");
 const router = express.Router();
 const {
   placeOrder,
+  placeCounterOrder,
   updateOrderStatus,
   getLiveAdminOrders,
   completeOrder,
@@ -15,7 +16,7 @@ const tenantContext = require("../middleware/tenant");
 
 // Public checkout route interface target
 router.post("/place", placeOrder);
-
+router.post("/counter-place", protect, placeCounterOrder);
 router.get(
   "/billing",
   protect,
