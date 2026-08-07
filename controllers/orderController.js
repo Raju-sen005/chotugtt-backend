@@ -291,6 +291,35 @@ exports.placeCounterOrder = async (req, res) => {
   }
 };
 
+exports.getTableOrder = async (req, res) => {
+  try {
+    const { tableNumber } = req.params;
+
+    const order = await Order.findOne({
+      restaurantId: req.user.restaurantId,
+      tableNumber,
+      status: { $in: ["PENDING", "ACCEPTED"] },
+    });
+
+    if (!order) {
+      return res.json({
+        success: true,
+        order: null,
+      });
+    }
+
+    res.json({
+      success: true,
+      order,
+    });
+  } catch (err) {
+    res.status(500).json({
+      success: false,
+      message: err.message,
+    });
+  }
+};
+
 // @desc    Admin transitioning live status configurations
 // @route   PATCH /api/v1/orders/:id/status
 exports.updateOrderStatus = async (req, res) => {

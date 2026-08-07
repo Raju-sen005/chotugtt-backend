@@ -13,6 +13,9 @@ const restaurantSchema = new mongoose.Schema({
     state: String,
     zip: String
   },
+  // 💳 New UPI & Payment Integration Fields
+  upiId: { type: String, default: "" },
+  upiQrCode: { type: String, default: "" },
   qrCodeUrl: { type: String, default: "" },
   subscriptionPlan: { type: String, enum: ['STARTER', 'PRO', 'ENTERPRISE'], default: 'STARTER' },
   subscriptionStatus: { type: String, enum: ['ACTIVE', 'PAST_DUE', 'CANCELED'], default: 'ACTIVE' },

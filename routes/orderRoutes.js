@@ -10,6 +10,7 @@ const {
   cancelOrderItem,
   getPreviousBillingStats,
   shiftTableOrder,
+  getTableOrder,
 } = require("../controllers/orderController");
 const { protect, authorize } = require("../middleware/auth");
 const tenantContext = require("../middleware/tenant");
@@ -72,5 +73,12 @@ router.patch(
   authorize("OWNER", "MANAGER", "STAFF"),
   tenantContext,
   shiftTableOrder,
+);
+router.get(
+  "/table/:tableNumber",
+  protect,
+  authorize("OWNER", "MANAGER", "STAFF"),
+  tenantContext,
+  getTableOrder
 );
 module.exports = router;
