@@ -22,6 +22,7 @@ const orderSchema = new mongoose.Schema(
         name: { type: String, required: true },
         quantity: { type: Number, required: true, min: 1 },
         price: { type: Number, required: true },
+        discount: { type: Number, default: 0, min: 0 },
         status: {
           type: String,
           enum: ["ACTIVE", "REJECTED"],

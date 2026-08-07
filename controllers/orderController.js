@@ -259,6 +259,7 @@ exports.placeCounterOrder = async (req, res) => {
       price: i.price,
       quantity: i.quantity,
       itemModel: i.itemModel || "MenuItem",
+      discount: Number(i.discount) || 0,
     }));
 
     const uniqueOrderId = await generateReadableOrderId(restaurantId);
@@ -477,36 +478,28 @@ exports.cancelOrderItem = async (req, res) => {
     }
 
     // Cancel item
+    // Cancel item
     item.status = "REJECTED";
 
     // Remaining active items
     const remainingItems = order.items.filter((i) => i.status !== "REJECTED");
 
-    // New Subtotal
+    // 🔑 FIX: har item ka apna stored discount jodo, ratio-guess mat karo
     const newSubtotal = remainingItems.reduce(
       (sum, i) => sum + Number(i.price) * Number(i.quantity),
       0,
     );
+    const newDiscount = remainingItems.reduce(
+      (sum, i) => sum + Number(i.discount || 0),
+      0,
+    );
 
-    // Previous discount ratio
-    const previousSubtotal = Number(order.subtotal || 0);
-    const previousDiscount = Number(order.discount || 0);
-
-    const discountRate =
-      previousSubtotal > 0 ? previousDiscount / previousSubtotal : 0;
-
-    const newDiscount = Number((newSubtotal * discountRate).toFixed(2));
-
-    // Tax after discount
     const taxableAmount = Math.max(0, newSubtotal - newDiscount);
-
     const newTax = Number(
       (taxableAmount * Number(order.taxRate || 0)).toFixed(2),
     );
-
     const newTotal = Number((taxableAmount + newTax).toFixed(2));
 
-    // Update order
     order.subtotal = newSubtotal;
     order.discount = newDiscount;
     order.tax = newTax;
