@@ -212,6 +212,8 @@ exports.placeCounterOrder = async (req, res) => {
           price: i.price,
           quantity: i.quantity,
           itemModel: i.itemModel || "MenuItem",
+      discount: Number(i.discount) || 0,
+
         }));
 
         existingOrder.items.push(...formattedItems);
