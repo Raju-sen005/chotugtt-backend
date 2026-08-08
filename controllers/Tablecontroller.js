@@ -10,7 +10,9 @@ exports.getPublicFreeTables = async (req, res) => {
     const { restaurantId } = req.params;
 
     if (!mongoose.Types.ObjectId.isValid(restaurantId)) {
-      return res.status(400).json({ success: false, message: "Invalid restaurant ID" });
+      return res
+        .status(400)
+        .json({ success: false, message: "Invalid restaurant ID" });
     }
 
     const allTables = await Table.find({ restaurantId, isActive: true })
@@ -24,7 +26,8 @@ exports.getPublicFreeTables = async (req, res) => {
 
     const occupiedSet = new Set();
     activeOrders.forEach((o) => {
-      if (o.tableNumber && o.tableNumber !== "N/A") occupiedSet.add(String(o.tableNumber));
+      if (o.tableNumber && o.tableNumber !== "N/A")
+        occupiedSet.add(String(o.tableNumber));
       (o.mergedTables || []).forEach((t) => occupiedSet.add(String(t)));
     });
 
@@ -111,11 +114,14 @@ exports.addAdminTable = async (req, res) => {
   try {
     const { tableNumber, section } = req.body;
     if (!tableNumber || !String(tableNumber).trim()) {
-      return res.status(400).json({ success: false, message: "tableNumber is required" });
+      return res
+        .status(400)
+        .json({ success: false, message: "tableNumber is required" });
     }
 
     const clean = String(tableNumber).trim();
-    const cleanSection = section && String(section).trim() ? String(section).trim() : "General";
+    const cleanSection =
+      section && String(section).trim() ? String(section).trim() : "General";
     const restaurantId = req.user.restaurantId;
 
     const existing = await Table.findOne({ restaurantId, tableNumber: clean });
@@ -127,10 +133,17 @@ exports.addAdminTable = async (req, res) => {
         existing.section = cleanSection;
         await existing.save();
       } else {
-        return res.status(400).json({ success: false, message: "This table name already exists" });
+        return res
+          .status(400)
+          .json({ success: false, message: "This table name already exists" });
       }
     } else {
-      await Table.create({ restaurantId, tableNumber: clean, section: cleanSection, isActive: true });
+      await Table.create({
+        restaurantId,
+        tableNumber: clean,
+        section: cleanSection,
+        isActive: true,
+      });
     }
 
     // 🔑 Agar yeh section pehli baar use ho raha hai, toh usko Section list mein bhi upsert kar dein
@@ -155,7 +168,9 @@ exports.addAdminTable = async (req, res) => {
     res.status(200).json({ success: true, data: formattedTables });
   } catch (error) {
     if (error.code === 11000) {
-      return res.status(400).json({ success: false, message: "This table name already exists" });
+      return res
+        .status(400)
+        .json({ success: false, message: "This table name already exists" });
     }
     res.status(500).json({ success: false, message: error.message });
   }
@@ -168,7 +183,10 @@ exports.removeAdminTable = async (req, res) => {
     const { tableNumber } = req.params;
     const restaurantId = req.user.restaurantId;
 
-    await Table.findOneAndDelete({ restaurantId, tableNumber: String(tableNumber) });
+    await Table.findOneAndDelete({
+      restaurantId,
+      tableNumber: String(tableNumber),
+    });
 
     const tables = await Table.find({ restaurantId, isActive: true })
       .select("tableNumber isActive section")
@@ -195,15 +213,24 @@ exports.toggleTableStatus = async (req, res) => {
     const { isDisabled } = req.body;
     const restaurantId = req.user.restaurantId;
 
-    const table = await Table.findOne({ restaurantId, tableNumber: String(tableNumber) });
+    const table = await Table.findOne({
+      restaurantId,
+      tableNumber: String(tableNumber),
+    });
     if (!table) {
-      return res.status(404).json({ success: false, message: "Table not found" });
+      return res
+        .status(404)
+        .json({ success: false, message: "Table not found" });
     }
 
     table.isActive = !isDisabled;
     await table.save();
 
-    res.status(200).json({ success: true, message: "Table status updated", isActive: table.isActive });
+    res.status(200).json({
+      success: true,
+      message: "Table status updated",
+      isActive: table.isActive,
+    });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -218,13 +245,20 @@ exports.moveTableSection = async (req, res) => {
     const restaurantId = req.user.restaurantId;
 
     if (!section || !String(section).trim()) {
-      return res.status(400).json({ success: false, message: "section is required" });
+      return res
+        .status(400)
+        .json({ success: false, message: "section is required" });
     }
     const cleanSection = String(section).trim();
 
-    const table = await Table.findOne({ restaurantId, tableNumber: String(tableNumber) });
+    const table = await Table.findOne({
+      restaurantId,
+      tableNumber: String(tableNumber),
+    });
     if (!table) {
-      return res.status(404).json({ success: false, message: "Table not found" });
+      return res
+        .status(404)
+        .json({ success: false, message: "Table not found" });
     }
 
     table.section = cleanSection;
@@ -236,7 +270,9 @@ exports.moveTableSection = async (req, res) => {
       { upsert: true },
     );
 
-    res.status(200).json({ success: true, message: "Table moved", section: table.section });
+    res
+      .status(200)
+      .json({ success: true, message: "Table moved", section: table.section });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -249,7 +285,9 @@ exports.getPublicTableStatus = async (req, res) => {
     const { restaurantId } = req.params;
 
     if (!mongoose.Types.ObjectId.isValid(restaurantId)) {
-      return res.status(400).json({ success: false, message: "Invalid restaurant ID" });
+      return res
+        .status(400)
+        .json({ success: false, message: "Invalid restaurant ID" });
     }
 
     const allTables = await Table.find({ restaurantId, isActive: true })
@@ -260,18 +298,16 @@ exports.getPublicTableStatus = async (req, res) => {
     const activeOrders = await Order.find({
       restaurantId,
       status: { $in: ["PENDING", "ACCEPTED"] },
-    }).select("_id tableNumber mergedTables orderId customerName");
+    }).select("_id tableNumber mergedTables"); // 🔑 orderId/customerName ab select hi nahi kar rahe
 
     const occupiedMap = {};
     activeOrders.forEach((o) => {
       const involvedTables = [o.tableNumber, ...(o.mergedTables || [])].filter(
-        (t) => t && t !== "N/A"
+        (t) => t && t !== "N/A",
       );
       involvedTables.forEach((t) => {
+        // 🔑 FIX: public response mein sirf ye zaroori info — customer PII nahi
         occupiedMap[String(t)] = {
-          orderMongoId: o._id,
-          orderId: o.orderId,
-          customerName: o.customerName,
           mergedWith: involvedTables.filter((x) => String(x) !== String(t)),
         };
       });

@@ -176,7 +176,7 @@ exports.placeOrder = async (req, res) => {
 exports.placeCounterOrder = async (req, res) => {
   try {
     // 🔑 restaurantId req.user se lein agar req.body mein na ho
-    const restaurantId = req.body.restaurantId || req.user?.restaurantId;
+    const restaurantId = req.user?.restaurantId;
     const {
       orderType,
       items,
@@ -212,8 +212,7 @@ exports.placeCounterOrder = async (req, res) => {
           price: i.price,
           quantity: i.quantity,
           itemModel: i.itemModel || "MenuItem",
-      discount: Number(i.discount) || 0,
-
+          discount: Number(i.discount) || 0,
         }));
 
         existingOrder.items.push(...formattedItems);
@@ -385,8 +384,8 @@ exports.getLiveAdminOrders = async (req, res) => {
 // @route   PATCH /api/v1/orders/:id/complete
 exports.completeOrder = async (req, res) => {
   try {
-    const order = await Order.findByIdAndUpdate(
-      req.params.id,
+    const order = await Order.findOneAndUpdate(
+      { _id: req.params.id, restaurantId: req.user.restaurantId }, // 🔑 findOneAndUpdate ke sath ye sahi hai
       { status: "COMPLETED" },
       { new: true },
     );
