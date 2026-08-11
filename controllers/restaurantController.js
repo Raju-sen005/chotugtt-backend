@@ -1,9 +1,8 @@
-const fs = require('fs');
-const path = require('path');
+const fs = require("fs");
+const path = require("path");
 const Restaurant = require("../models/Restaurant");
 const cloudinary = require("../config/cloudinary");
-const QRCode = require('qrcode'); // 📦 Import local QR generator
-
+const QRCode = require("qrcode"); // 📦 Import local QR generator
 
 // @desc    Update profile configurations (Logo, Theme, Address)
 // @route   PATCH /api/v1/restaurant/profile
@@ -24,45 +23,109 @@ exports.updateRestaurantProfile = async (req, res) => {
 
     // 💳 Secure Local UPI QR Code Generation
     if (req.body.upiId !== undefined) {
-      updates.upiId = req.body.upiId.trim();
-      if (updates.upiId) {
-        // Fetch existing restaurant name if name isn't passed in current request
-        let restaurantName = req.body.name;
-        if (!restaurantName) {
-          const currentRes = await Restaurant.findById(req.user.restaurantId);
-          restaurantName = currentRes ? currentRes.name : 'Restaurant';
-        }
+      const requestedUpiId = req.body.upiId.trim();
 
-        // Standard UPI Deep Link URI
-        const upiString = `upi://pay?pa=${updates.upiId}&pn=${encodeURIComponent(restaurantName)}&cu=INR`;
+      // Empty UPI is allowed only when no UPI has been configured yet
+      if (!requestedUpiId) {
+        const currentRestaurant = await Restaurant.findById(
+          req.user.restaurantId,
+        ).select("upiId");
 
-        try {
-          // Generate QR code locally as a Data URL (base64 PNG) - 100% Secure & Private
-          updates.upiQrCode = await QRCode.toDataURL(upiString, {
-            errorCorrectionLevel: 'H',
-            margin: 2,
-            scale: 6,
-            color: {
-              dark: '#000000',
-              light: '#FFFFFF'
-            }
+        if (currentRestaurant?.upiId) {
+          return res.status(403).json({
+            success: false,
+            code: "UPI_LOCKED",
+            message:
+              "UPI ID is already configured and cannot be removed. Please contact platform admin.",
           });
-        } catch (qrError) {
-          console.error("QR Generation Error:", qrError);
-          return res.status(500).json({ success: false, message: "Failed to generate secure payment QR code" });
         }
-      } else {
+
+        updates.upiId = "";
         updates.upiQrCode = "";
+      } else {
+        // Validate UPI format
+        const upiRegex = /^[a-zA-Z0-9._-]{2,256}@[a-zA-Z]{2,64}$/;
+
+        if (!upiRegex.test(requestedUpiId)) {
+          return res.status(400).json({
+            success: false,
+            code: "INVALID_UPI_ID",
+            message:
+              "Please enter a valid UPI ID, for example: restaurant@paytm",
+          });
+        }
+
+        const currentRestaurant = await Restaurant.findById(
+          req.user.restaurantId,
+        ).select("upiId name");
+
+        if (!currentRestaurant) {
+          return res.status(404).json({
+            success: false,
+            message: "Restaurant not found",
+          });
+        }
+
+        // Already configured → owner cannot change it
+        if (currentRestaurant.upiId) {
+          if (
+            requestedUpiId.toLowerCase() !==
+            currentRestaurant.upiId.toLowerCase()
+          ) {
+            return res.status(403).json({
+              success: false,
+              code: "UPI_LOCKED",
+              message:
+                "UPI ID is already configured and cannot be changed from the profile. Please contact platform admin.",
+            });
+          }
+
+          // Same UPI → no change required
+        } else {
+          // First-time UPI setup
+          updates.upiId = requestedUpiId;
+
+          const restaurantName =
+            req.body.name || currentRestaurant.name || "Restaurant";
+
+          const upiString =
+            `upi://pay?pa=${encodeURIComponent(requestedUpiId)}` +
+            `&pn=${encodeURIComponent(restaurantName)}` +
+            `&cu=INR`;
+
+          try {
+            updates.upiQrCode = await QRCode.toDataURL(upiString, {
+              errorCorrectionLevel: "H",
+              margin: 2,
+              scale: 6,
+              color: {
+                dark: "#000000",
+                light: "#FFFFFF",
+              },
+            });
+          } catch (qrError) {
+            console.error("QR Generation Error:", qrError);
+
+            return res.status(500).json({
+              success: false,
+              message: "Failed to generate secure payment QR code",
+            });
+          }
+        }
       }
     }
 
     // Handle nested address fields securely
     if (req.body.address) {
       updates.address = {};
-      if (req.body.address.street !== undefined) updates.address.street = req.body.address.street;
-      if (req.body.address.city !== undefined) updates.address.city = req.body.address.city;
-      if (req.body.address.state !== undefined) updates.address.state = req.body.address.state;
-      if (req.body.address.zip !== undefined) updates.address.zip = req.body.address.zip;
+      if (req.body.address.street !== undefined)
+        updates.address.street = req.body.address.street;
+      if (req.body.address.city !== undefined)
+        updates.address.city = req.body.address.city;
+      if (req.body.address.state !== undefined)
+        updates.address.state = req.body.address.state;
+      if (req.body.address.zip !== undefined)
+        updates.address.zip = req.body.address.zip;
     } else {
       if (
         req.body["address[street]"] !== undefined ||
@@ -71,20 +134,38 @@ exports.updateRestaurantProfile = async (req, res) => {
         req.body["address[zip]"] !== undefined
       ) {
         updates.address = {};
-        if (req.body["address[street]"] !== undefined) updates.address.street = req.body["address[street]"];
-        if (req.body["address[city]"] !== undefined) updates.address.city = req.body["address[city]"];
-        if (req.body["address[state]"] !== undefined) updates.address.state = req.body["address[state]"];
-        if (req.body["address[zip]"] !== undefined) updates.address.zip = req.body["address[zip]"];
+        if (req.body["address[street]"] !== undefined)
+          updates.address.street = req.body["address[street]"];
+        if (req.body["address[city]"] !== undefined)
+          updates.address.city = req.body["address[city]"];
+        if (req.body["address[state]"] !== undefined)
+          updates.address.state = req.body["address[state]"];
+        if (req.body["address[zip]"] !== undefined)
+          updates.address.zip = req.body["address[zip]"];
       }
     }
 
     // Handle Logo File Upload (Local Storage via Multer)
     if (req.file) {
-      const existingRestaurant = await Restaurant.findById(req.user.restaurantId);
-      if (existingRestaurant && existingRestaurant.logo && existingRestaurant.logo.startsWith('/uploads/')) {
-        const oldPath = path.join(__dirname, '../public', existingRestaurant.logo);
+      const existingRestaurant = await Restaurant.findById(
+        req.user.restaurantId,
+      );
+      if (
+        existingRestaurant &&
+        existingRestaurant.logo &&
+        existingRestaurant.logo.startsWith("/uploads/")
+      ) {
+        const oldPath = path.join(
+          __dirname,
+          "../public",
+          existingRestaurant.logo,
+        );
         if (fs.existsSync(oldPath)) {
-          try { fs.unlinkSync(oldPath); } catch (err) { console.error(err); }
+          try {
+            fs.unlinkSync(oldPath);
+          } catch (err) {
+            console.error(err);
+          }
         }
       }
       updates.logo = `/uploads/${req.file.filename}`;
@@ -93,11 +174,13 @@ exports.updateRestaurantProfile = async (req, res) => {
     const updatedRestaurant = await Restaurant.findByIdAndUpdate(
       req.user.restaurantId,
       { $set: updates },
-      { new: true, runValidators: true }
+      { new: true, runValidators: true },
     );
 
     if (!updatedRestaurant) {
-      return res.status(404).json({ success: false, message: "Restaurant not found" });
+      return res
+        .status(404)
+        .json({ success: false, message: "Restaurant not found" });
     }
 
     res.status(200).json({
