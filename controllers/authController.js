@@ -38,12 +38,10 @@ exports.registerTenant = async (req, res) => {
         : "";
 
     if (!finalSlug) {
-      return res
-        .status(400)
-        .json({
-          success: false,
-          message: "Valid restaurant name or slug is required",
-        });
+      return res.status(400).json({
+        success: false,
+        message: "Valid restaurant name or slug is required",
+      });
     }
 
     // Check if slug is unique
@@ -60,12 +58,41 @@ exports.registerTenant = async (req, res) => {
         .status(400)
         .json({ success: false, message: "Email already registered" });
 
+    // Check if mobile number is already registered with another restaurant
+    const phoneExists = await Restaurant.findOne({ phone });
+
+    if (phoneExists) {
+      return res.status(400).json({
+        success: false,
+        code: "PHONE_ALREADY_REGISTERED",
+        message:
+          "This mobile number is already registered with another restaurant.",
+      });
+    }
+
     let logoUrl = "";
 
     // 🖼️ Agar file aayi hai, toh local file ka path ya relative URL save karein
     if (req.file) {
-      // Aap chahein toh pura path ya relative path save kar sakte hain (jaise: /uploads/filename.png)
-      logoUrl = `/uploads/${req.file.filename}`;
+      const result = await new Promise((resolve, reject) => {
+        const uploadStream = cloudinary.uploader.upload_stream(
+          {
+            folder: "chotu/restaurants/logos",
+            resource_type: "image",
+          },
+          (error, result) => {
+            if (error) {
+              reject(error);
+            } else {
+              resolve(result);
+            }
+          },
+        );
+
+        uploadStream.end(req.file.buffer);
+      });
+
+      logoUrl = result.secure_url;
     }
 
     // 2. Create Restaurant Profile with Logo

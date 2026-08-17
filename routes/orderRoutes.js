@@ -9,6 +9,8 @@ const {
   getBillingStats,
   cancelOrderItem,
   getPreviousBillingStats,
+  getKOTItems,
+  markKOTPrinted,
   shiftTableOrder,
   getTableOrder,
 } = require("../controllers/orderController");
@@ -34,6 +36,11 @@ router.get(
   tenantContext,
   getLiveAdminOrders,
 );
+
+router.get("/:id/kot", protect, getKOTItems);
+
+router.patch("/:id/kot/printed", protect, markKOTPrinted);
+
 router.patch(
   "/:id/status",
   protect,
@@ -79,6 +86,6 @@ router.get(
   protect,
   authorize("OWNER", "MANAGER", "STAFF"),
   tenantContext,
-  getTableOrder
+  getTableOrder,
 );
 module.exports = router;

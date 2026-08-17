@@ -1,11 +1,12 @@
 const mongoose = require("mongoose");
 const MenuItem = require("../models/MenuItem");
 const Restaurant = require("../models/Restaurant");
+const cloudinary = require("../config/cloudinary");
 const Combo = require("../models/Combo");
 const Offer = require("../models/Offer");
 const Table = require("../models/Table");
 const { GoogleGenAI } = require("@google/genai");
-const fs = require("fs/promises");
+// const fs = require("fs/promises");
 
 const ai = new GoogleGenAI({
   apiKey: process.env.GEMINI_API_KEY,
@@ -21,6 +22,25 @@ const FALLBACK_IMAGE =
 // HELPERS
 // ============================================================
 
+const uploadBufferToCloudinary = (buffer, folder) => {
+  return new Promise((resolve, reject) => {
+    const uploadStream = cloudinary.uploader.upload_stream(
+      {
+        folder,
+        resource_type: "image",
+      },
+      (error, result) => {
+        if (error) {
+          reject(error);
+        } else {
+          resolve(result.secure_url);
+        }
+      },
+    );
+
+    uploadStream.end(buffer);
+  });
+};
 /**
  * Pexels se dish/combo naam ke hisaab se matching food photo fetch karta hai.
  * - Timeout guard (Pexels slow ho to poori request hang na ho)
@@ -129,7 +149,10 @@ exports.createMenuItem = async (req, res) => {
 
     let imageUrl = "";
     if (req.file) {
-      imageUrl = `/uploads/${req.file.filename || req.file.originalname}`;
+      imageUrl = await uploadBufferToCloudinary(
+        req.file.buffer,
+        "chotu/menu/items",
+      );
     }
 
     const item = await MenuItem.create({
@@ -154,7 +177,7 @@ exports.createMenuItem = async (req, res) => {
  * - Poori operation ek MongoDB transaction mein hoti hai (dono collections consistent rahein)
  */
 exports.extractMenuFromImage = async (req, res) => {
-  let uploadedFilePath = null;
+  // let uploadedFilePath = null;
 
   try {
     if (!req.file) {
@@ -163,7 +186,7 @@ exports.extractMenuFromImage = async (req, res) => {
         .json({ success: false, message: "Please upload a menu image." });
     }
 
-    uploadedFilePath = req.file.path;
+    // uploadedFilePath = req.file.path;
 
     if (!req.file.mimetype?.startsWith("image/")) {
       return res
@@ -171,7 +194,7 @@ exports.extractMenuFromImage = async (req, res) => {
         .json({ success: false, message: "Uploaded file must be an image." });
     }
 
-    const imageBuffer = await fs.readFile(req.file.path);
+    const imageBuffer = req.file.buffer;
     const base64Image = imageBuffer.toString("base64");
 
     const response = await ai.models.generateContent({
@@ -278,11 +301,11 @@ Do not include any text before or after the JSON array.`,
     });
   } finally {
     // Temp uploaded file cleanup — chahe success ho ya fail, disk pe junk nahi rehna chahiye
-    if (uploadedFilePath) {
-      fs.unlink(uploadedFilePath).catch((err) =>
-        console.error("Failed to clean up temp upload:", err.message),
-      );
-    }
+    // if (uploadedFilePath) {
+    //   fs.unlink(uploadedFilePath).catch((err) =>
+    //     console.error("Failed to clean up temp upload:", err.message),
+    //   );
+    // }
   }
 };
 
@@ -300,7 +323,10 @@ exports.updateMenuItem = async (req, res) => {
     const updates = { ...req.body };
 
     if (req.file) {
-      updates.image = `/uploads/${req.file.filename}`;
+      updates.image = await uploadBufferToCloudinary(
+        req.file.buffer,
+        "chotu/menu/items",
+      );
     }
 
     const item = await MenuItem.findOneAndUpdate(
@@ -347,7 +373,10 @@ exports.createCombo = async (req, res) => {
 
     let imageUrl = "";
     if (req.file) {
-      imageUrl = `/uploads/${req.file.filename}`;
+      imageUrl = await uploadBufferToCloudinary(
+        req.file.buffer,
+        "chotu/menu/combos",
+      );
     }
 
     const combo = await Combo.create({
@@ -382,7 +411,10 @@ exports.updateCombo = async (req, res) => {
       updates.items = JSON.parse(updates.items);
     }
     if (req.file) {
-      updates.image = `/uploads/${req.file.filename}`;
+      updates.image = await uploadBufferToCloudinary(
+        req.file.buffer,
+        "chotu/menu/combos",
+      );
     }
 
     const combo = await Combo.findOneAndUpdate(

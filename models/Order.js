@@ -28,6 +28,10 @@ const orderSchema = new mongoose.Schema(
           enum: ["ACTIVE", "REJECTED"],
           default: "ACTIVE",
         }, // 🆕 per-item cancel
+        kotPrintedAt: {
+          type: Date,
+          default: null,
+        },
       },
     ],
     subtotal: { type: Number, required: true, min: 0 },

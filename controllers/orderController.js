@@ -331,34 +331,180 @@ exports.updateOrderStatus = async (req, res) => {
     const order = await Order.findOne({
       _id: req.params.id,
       restaurantId: req.user.restaurantId,
-    }).populate("restaurantId");
+    });
 
-    if (!order)
-      return res
-        .status(404)
-        .json({ success: false, message: "Order records not found" });
-
-    order.status = status;
-    if (status === "REJECTED" && rejectReason) {
-      order.rejectReason = rejectReason;
+    if (!order) {
+      return res.status(404).json({
+        success: false,
+        message: "Order records not found",
+      });
     }
+
+    // 🔴 Reject
+    if (status === "REJECTED") {
+      order.status = "REJECTED";
+
+      if (rejectReason) {
+        order.rejectReason = rejectReason;
+      }
+
+      await order.save();
+
+      const io = getIO();
+
+      io.to(order.restaurantId.toString()).emit("ORDER_STATUS_UPDATED", order);
+
+      return res.status(200).json({
+        success: true,
+        message: "Order marked as REJECTED",
+        data: order,
+        kotItems: [],
+      });
+    }
+
+    // 🟢 Accept
+    if (status === "ACCEPTED") {
+      order.status = "ACCEPTED";
+
+      await order.save();
+
+      // 🆕 First-time KOT items
+      const kotItems = order.items.filter(
+        (item) => item.status !== "REJECTED" && !item.kotPrintedAt,
+      );
+
+      const io = getIO();
+
+      io.to(order.restaurantId.toString()).emit("ORDER_STATUS_UPDATED", order);
+
+      return res.status(200).json({
+        success: true,
+        message: "Order accepted successfully",
+        data: order,
+
+        // 🧾 Frontend automatic KOT ke liye
+        kotItems,
+      });
+    }
+
+    return res.status(400).json({
+      success: false,
+      message: "Invalid order status",
+    });
+  } catch (error) {
+    console.error("Update Order Status Error:", error);
+
+    res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+// ============================================================
+// 🧾 GET UNPRINTED KOT ITEMS
+// ============================================================
+// @route GET /api/v1/orders/:id/kot
+exports.getKOTItems = async (req, res) => {
+  try {
+    const order = await Order.findOne({
+      _id: req.params.id,
+      restaurantId: req.user.restaurantId,
+      status: { $in: ["PENDING", "ACCEPTED"] },
+    });
+
+    if (!order) {
+      return res.status(404).json({
+        success: false,
+        message: "Active order not found",
+      });
+    }
+
+    const kotItems = order.items.filter(
+      (item) => item.status !== "REJECTED" && !item.kotPrintedAt,
+    );
+
+    if (kotItems.length === 0) {
+      return res.status(200).json({
+        success: true,
+        hasNewItems: false,
+        message: "No new items available for KOT",
+        data: {
+          order,
+          items: [],
+        },
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      hasNewItems: true,
+      data: {
+        order,
+        items: kotItems,
+      },
+    });
+  } catch (error) {
+    console.error("Get KOT Error:", error);
+
+    res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+// ============================================================
+// 🧾 MARK KOT ITEMS AS PRINTED
+// ============================================================
+// @route PATCH /api/v1/orders/:id/kot/printed
+exports.markKOTPrinted = async (req, res) => {
+  try {
+    const { itemIds = [] } = req.body;
+
+    const order = await Order.findOne({
+      _id: req.params.id,
+      restaurantId: req.user.restaurantId,
+      status: { $in: ["PENDING", "ACCEPTED"] },
+    });
+
+    if (!order) {
+      return res.status(404).json({
+        success: false,
+        message: "Active order not found",
+      });
+    }
+
+    const ids = new Set(itemIds.map(String));
+    const now = new Date();
+
+    let printedCount = 0;
+
+    order.items.forEach((item) => {
+      if (
+        ids.has(String(item._id)) &&
+        item.status !== "REJECTED" &&
+        !item.kotPrintedAt
+      ) {
+        item.kotPrintedAt = now;
+        printedCount++;
+      }
+    });
 
     await order.save();
 
-    const io = getIO();
-    io.to(order._id.toString()).emit("ORDER_STATUS_UPDATED", {
-      orderId: order.orderId,
-      status: order.status,
-      rejectReason: order.rejectReason,
-    });
-
     res.status(200).json({
       success: true,
-      message: `Order marked as ${status}`,
+      message: `${printedCount} KOT item(s) marked as printed`,
       data: order,
     });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    console.error("Mark KOT Printed Error:", error);
+
+    res.status(500).json({
+      success: false,
+      message: error.message,
+    });
   }
 };
 

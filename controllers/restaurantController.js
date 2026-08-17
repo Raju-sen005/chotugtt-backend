@@ -1,5 +1,5 @@
-const fs = require("fs");
-const path = require("path");
+// const fs = require("fs");
+// const path = require("path");
 const Restaurant = require("../models/Restaurant");
 const cloudinary = require("../config/cloudinary");
 const QRCode = require("qrcode"); // 📦 Import local QR generator
@@ -8,6 +8,26 @@ const QRCode = require("qrcode"); // 📦 Import local QR generator
 // @route   PATCH /api/v1/restaurant/profile
 // @desc    Update profile configurations (Logo, Theme, Address, UPI ID)
 // @route   PATCH /api/v1/restaurant/profile
+
+const uploadBufferToCloudinary = (buffer, folder) => {
+  return new Promise((resolve, reject) => {
+    const uploadStream = cloudinary.uploader.upload_stream(
+      {
+        folder,
+        resource_type: "image",
+      },
+      (error, result) => {
+        if (error) {
+          reject(error);
+        } else {
+          resolve(result.secure_url);
+        }
+      }
+    );
+
+    uploadStream.end(buffer);
+  });
+};
 
 // @desc    Update profile configurations (Logo, Theme, Address, UPI ID)
 // @route   PATCH /api/v1/restaurant/profile
@@ -146,30 +166,13 @@ exports.updateRestaurantProfile = async (req, res) => {
     }
 
     // Handle Logo File Upload (Local Storage via Multer)
-    if (req.file) {
-      const existingRestaurant = await Restaurant.findById(
-        req.user.restaurantId,
-      );
-      if (
-        existingRestaurant &&
-        existingRestaurant.logo &&
-        existingRestaurant.logo.startsWith("/uploads/")
-      ) {
-        const oldPath = path.join(
-          __dirname,
-          "../public",
-          existingRestaurant.logo,
-        );
-        if (fs.existsSync(oldPath)) {
-          try {
-            fs.unlinkSync(oldPath);
-          } catch (err) {
-            console.error(err);
-          }
-        }
-      }
-      updates.logo = `/uploads/${req.file.filename}`;
-    }
+    // Handle Logo Upload → Cloudinary
+if (req.file) {
+  updates.logo = await uploadBufferToCloudinary(
+    req.file.buffer,
+    "chotu/restaurants/logos"
+  );
+}
 
     const updatedRestaurant = await Restaurant.findByIdAndUpdate(
       req.user.restaurantId,
@@ -185,7 +188,7 @@ exports.updateRestaurantProfile = async (req, res) => {
 
     res.status(200).json({
       success: true,
-      message: "Profile and secure local QR updated successfully",
+      message: "Profile and secure QR updated successfully",
       data: updatedRestaurant,
     });
   } catch (error) {
