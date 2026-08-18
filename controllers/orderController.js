@@ -526,35 +526,121 @@ exports.getLiveAdminOrders = async (req, res) => {
   }
 };
 
-// @desc    Complete Order & Free the Table
+// @desc    Complete order, record payment and free table
 // @route   PATCH /api/v1/orders/:id/complete
 exports.completeOrder = async (req, res) => {
   try {
-    const order = await Order.findOneAndUpdate(
-      { _id: req.params.id, restaurantId: req.user.restaurantId }, // 🔑 findOneAndUpdate ke sath ye sahi hai
-      { status: "COMPLETED" },
-      { new: true },
-    );
+    const { paymentMethod } = req.body;
 
-    if (!order) {
-      return res
-        .status(404)
-        .json({ success: false, message: "Order not found" });
+    const allowedPaymentMethods = ["CASH", "UPI", "DUE"];
+
+    if (!paymentMethod || !allowedPaymentMethods.includes(paymentMethod)) {
+      return res.status(400).json({
+        success: false,
+        message: "Valid payment method is required: CASH, UPI or DUE",
+      });
     }
 
+    const order = await Order.findOne({
+      _id: req.params.id,
+      restaurantId: req.user.restaurantId,
+    });
+
+    if (!order) {
+      return res.status(404).json({
+        success: false,
+        message: "Order not found",
+      });
+    }
+
+    // Prevent accidental duplicate completion/payment recording
+    if (order.status === "COMPLETED") {
+      return res.status(409).json({
+        success: false,
+        message: "This order has already been billed.",
+        data: order,
+      });
+    }
+
+    if (order.status !== "ACCEPTED") {
+      return res.status(400).json({
+        success: false,
+        message: "Only accepted orders can be billed.",
+      });
+    }
+
+    const totalAmount = Number(order.total || 0);
+
+    if (totalAmount <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Order total must be greater than zero.",
+      });
+    }
+
+    // ==========================================
+    // PAYMENT CALCULATION
+    // ==========================================
+
+    order.status = "COMPLETED";
+    order.paymentMethod = paymentMethod;
+
+    if (paymentMethod === "DUE") {
+      order.paymentStatus = "DUE";
+      order.paidAmount = 0;
+      order.dueAmount = totalAmount;
+      order.paymentCollectedAt = null;
+    } else {
+      order.paymentStatus = "PAID";
+      order.paidAmount = totalAmount;
+      order.dueAmount = 0;
+      order.paymentCollectedAt = new Date();
+    }
+
+    await order.save();
+
+    // ==========================================
+    // REALTIME UPDATE
+    // ==========================================
+
     const io = getIO();
+
     io.to(order.restaurantId.toString()).emit("ORDER_STATUS_UPDATED", order);
 
-    res.status(200).json({ success: true, message: "Table is now free!" });
+    // ==========================================
+    // RESPONSE
+    // ==========================================
+
+    return res.status(200).json({
+      success: true,
+      message:
+        paymentMethod === "DUE"
+          ? "Bill generated and marked as due."
+          : `Bill generated successfully via ${paymentMethod}.`,
+      data: order,
+      payment: {
+        method: paymentMethod,
+        status: order.paymentStatus,
+        total: totalAmount,
+        paidAmount: order.paidAmount,
+        dueAmount: order.dueAmount,
+      },
+    });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    console.error("Complete Order Error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
   }
 };
 
 exports.getBillingStats = async (req, res) => {
   try {
-    const { filter } = req.query;
-    const rId = new mongoose.Types.ObjectId(req.user.restaurantId);
+    const { filter = "today", paymentMethod = "ALL" } = req.query;
+
+    const restaurantId = new mongoose.Types.ObjectId(req.user.restaurantId);
 
     let startDate = new Date();
 
@@ -568,15 +654,65 @@ exports.getBillingStats = async (req, res) => {
       startDate.setFullYear(startDate.getFullYear() - 1);
     }
 
-    const bills = await Order.find({
-      restaurantId: rId,
+    const query = {
+      restaurantId,
       status: "COMPLETED",
-      createdAt: { $gte: startDate },
-    }).sort({ createdAt: -1 });
+      createdAt: {
+        $gte: startDate,
+      },
+    };
 
-    res.status(200).json({ success: true, data: bills });
+    if (["CASH", "UPI", "DUE"].includes(paymentMethod)) {
+      query.paymentMethod = paymentMethod;
+    }
+
+    const bills = await Order.find(query).sort({ createdAt: -1 }).lean();
+
+    const summary = {
+      cash: 0,
+      upi: 0,
+      due: 0,
+      cashCount: 0,
+      upiCount: 0,
+      dueCount: 0,
+      totalCollected: 0,
+      totalDue: 0,
+    };
+
+    for (const bill of bills) {
+      const total = Number(bill.total || 0);
+
+      if (bill.paymentMethod === "CASH") {
+        summary.cash += total;
+        summary.cashCount += 1;
+        summary.totalCollected += total;
+      }
+
+      if (bill.paymentMethod === "UPI") {
+        summary.upi += total;
+        summary.upiCount += 1;
+        summary.totalCollected += total;
+      }
+
+      if (bill.paymentMethod === "DUE") {
+        summary.due += Number(bill.dueAmount || total);
+        summary.dueCount += 1;
+        summary.totalDue += Number(bill.dueAmount || total);
+      }
+    }
+
+    res.status(200).json({
+      success: true,
+      data: bills,
+      summary,
+    });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    console.error("Billing Stats Error:", err);
+
+    res.status(500).json({
+      success: false,
+      message: err.message,
+    });
   }
 };
 

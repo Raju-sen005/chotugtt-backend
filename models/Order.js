@@ -50,12 +50,42 @@ const orderSchema = new mongoose.Schema(
     },
     // Add inside orderSchema
     tableNumber: { type: String, default: "N/A" },
+    paymentMethod: {
+      type: String,
+      enum: ["CASH", "UPI", "DUE"],
+      default: null,
+      index: true,
+    },
+
+    paymentStatus: {
+      type: String,
+      enum: ["UNPAID", "PAID", "DUE"],
+      default: "UNPAID",
+      index: true,
+    },
+
+    paidAmount: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    dueAmount: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    paymentCollectedAt: {
+      type: Date,
+      default: null,
+    },
     mergedTables: { type: [String], default: [] }, // 🔑 customer-side table-merge feature — other table(s) billed together with this order
     rejectReason: { type: String, default: "" },
   },
   { timestamps: true },
 );
-orderSchema.index({ createdAt: 1 }, { expireAfterSeconds: 31536000 });
+// orderSchema.index({ createdAt: 1 }, { expireAfterSeconds: 31536000 });
 orderSchema.index({ restaurantId: 1, status: 1, createdAt: -1 });
 
 // 🔑 CRITICAL FIX: Compound Unique Index scoped strictly per Restaurant
