@@ -279,8 +279,12 @@ exports.placeCounterOrder = async (req, res) => {
       tax: Number(tax) || 0,
       taxRate: taxableAmount > 0 ? (Number(tax) || 0) / taxableAmount : 0,
       total: Number(total),
-      status: "COMPLETED",
+      status: "PENDING",
     });
+
+    const io = getIO();
+
+    io.to(restaurantId.toString()).emit("NEW_ORDER_RECEIVED", newOrder);
 
     res.status(201).json({
       success: true,
