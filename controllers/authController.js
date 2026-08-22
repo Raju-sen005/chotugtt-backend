@@ -3,12 +3,34 @@ const User = require("../models/User");
 const jwt = require("jsonwebtoken");
 const cloudinary = require("../config/cloudinary"); // Cloudinary configuration import karein
 
-const generateTokenAndSetCookie = (res, userId) => {
-  const isProduction = process.env.NODE_ENV === "production";
+// const generateTokenAndSetCookie = (res, userId) => {
+//   const isProduction = process.env.NODE_ENV === "production";
 
-  const token = jwt.sign({ id: String(userId) }, process.env.JWT_SECRET, {
-    expiresIn: "7d",
-  });
+//   const token = jwt.sign({ id: String(userId) }, process.env.JWT_SECRET, {
+//     expiresIn: "7d",
+//   });
+
+//   res.cookie("jwt", token, {
+//     httpOnly: true,
+//     secure: isProduction,
+//     sameSite: isProduction ? "none" : "lax",
+//     maxAge: 7 * 24 * 60 * 60 * 1000,
+//     path: "/",
+//   });
+
+//   return token;
+// };
+
+const generateTokenAndSetCookie = (res, userId) => {
+  const token = jwt.sign(
+    { id: String(userId) },
+    process.env.JWT_SECRET,
+    {
+      expiresIn: "7d",
+    }
+  );
+
+  const isProduction = process.env.NODE_ENV === "production";
 
   res.cookie("jwt", token, {
     httpOnly: true,
