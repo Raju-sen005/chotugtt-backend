@@ -428,13 +428,13 @@ exports.logout = async (req, res) => {
   const isProduction = process.env.NODE_ENV === "production";
 
   res.cookie("jwt", "", {
-    httpOnly: true,
-    secure: isProduction,
-    sameSite: isProduction ? "none" : "lax",
-    expires: new Date(0),
-    maxAge: 0,
-    path: "/",
-  });
+  httpOnly: true,
+  secure: true,
+  sameSite: "none",
+  expires: new Date(0),
+  maxAge: 0,
+  path: "/",
+});
 
   return res.status(200).json({
     success: true,
