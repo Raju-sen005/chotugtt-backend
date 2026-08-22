@@ -1,5 +1,7 @@
 const express = require("express");
+
 const router = express.Router();
+
 const {
   getPublicFreeTables,
   getTableStatusForAdmin,
@@ -8,60 +10,96 @@ const {
   addAdminTable,
   toggleTableStatus,
   removeAdminTable,
-  moveTableSection
+  moveTableSection,
 } = require("../controllers/Tablecontroller");
+
 const { protect, authorize } = require("../middleware/auth");
 const tenantContext = require("../middleware/tenant");
 
-// Public — customer-facing merge picker (same pattern as orderRoutes' /place)
-router.get("/public/:restaurantId", getPublicFreeTables);
-router.get("/status/:restaurantId", getPublicTableStatus); // 👈 Yeh naya route add karein
-router.patch("/admin/:tableNumber/section", protect, moveTableSection);
-// Admin — same auth chain as your other admin-isolated routes
+const TABLE_ADMIN_ROLES = ["OWNER", "MANAGER", "STAFF"];
+const TABLE_WRITE_ROLES = ["OWNER", "MANAGER"];
+
+/*
+|--------------------------------------------------------------------------
+| PUBLIC
+|--------------------------------------------------------------------------
+| These endpoints intentionally use restaurantId from URL because
+| customer/public menu does not have authenticated restaurant context.
+|
+| IMPORTANT:
+| restaurantId is ONLY used to select the requested public tenant.
+| No authenticated tenant data is trusted from client.
+|--------------------------------------------------------------------------
+*/
+
+router.get(
+  "/public/:restaurantId",
+  getPublicFreeTables
+);
+
+router.get(
+  "/status/:restaurantId",
+  getPublicTableStatus
+);
+
+/*
+|--------------------------------------------------------------------------
+| ADMIN
+|--------------------------------------------------------------------------
+*/
+
+/*
+ * Move table to another section
+ *
+ * IMPORTANT:
+ * protect + authorize + tenantContext
+ */
+router.patch(
+  "/admin/:tableNumber/section",
+  protect,
+  authorize(...TABLE_WRITE_ROLES),
+  tenantContext,
+  moveTableSection
+);
+
 router.get(
   "/status",
   protect,
-  authorize("OWNER", "MANAGER", "STAFF"),
+  authorize(...TABLE_ADMIN_ROLES),
   tenantContext,
-  getTableStatusForAdmin,
+  getTableStatusForAdmin
 );
+
 router.get(
   "/admin",
   protect,
-  authorize("OWNER", "MANAGER", "STAFF"),
+  authorize(...TABLE_ADMIN_ROLES),
   tenantContext,
-  getAdminTableList,
+  getAdminTableList
 );
+
 router.post(
   "/admin",
   protect,
-  authorize("OWNER", "MANAGER", "STAFF"),
+  authorize(...TABLE_WRITE_ROLES),
   tenantContext,
-  addAdminTable,
+  addAdminTable
 );
+
 router.patch(
   "/admin/:tableNumber/toggle",
   protect,
-  authorize("OWNER", "MANAGER", "STAFF"),
+  authorize(...TABLE_WRITE_ROLES),
   tenantContext,
-  toggleTableStatus, // 👈 Route add karein
+  toggleTableStatus
 );
+
 router.delete(
   "/admin/:tableNumber",
   protect,
-  authorize("OWNER", "MANAGER", "STAFF"),
+  authorize(...TABLE_WRITE_ROLES),
   tenantContext,
-  removeAdminTable,
+  removeAdminTable
 );
 
 module.exports = router;
-
-/*
- * server.js mein mount karo (baaki routes jaisa hi pattern, no /api/v1 prefix):
- *
- *   const tableRoutes = require('./routes/tableRoutes');
- *   app.use('/tables', tableRoutes);
- *
- * Isse StoreSettings.jsx aur PublicMenu.jsx dono ke existing
- * `${VITE_APP_API_BASE}/tables/...` calls bina kisi change ke match ho jaayenge.
- */

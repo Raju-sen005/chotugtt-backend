@@ -2,6 +2,7 @@ const mongoose = require("mongoose");
 const Order = require("../models/Order");
 const Table = require("../models/Table");
 const Section = require("../models/Section");
+const { emitToRestaurant } = require("../services/socketService");
 
 // @desc    Konse tables abhi free hain (customer merge-picker ke liye) — public
 // @route   GET /tables/public/:restaurantId
@@ -164,7 +165,14 @@ exports.addAdminTable = async (req, res) => {
       isDisabled: !t.isActive,
       section: t.section || "General",
     }));
-
+    emitToRestaurant(restaurantId, "TABLES_UPDATED", {
+      action: "CREATED",
+      table: {
+        tableNumber: clean,
+        section: cleanSection,
+        isDisabled: false,
+      },
+    });
     res.status(200).json({ success: true, data: formattedTables });
   } catch (error) {
     if (error.code === 11000) {
@@ -199,6 +207,10 @@ exports.removeAdminTable = async (req, res) => {
       section: t.section || "General",
     }));
 
+    emitToRestaurant(restaurantId, "TABLES_UPDATED", {
+      action: "DELETED",
+      tableNumber: String(tableNumber),
+    });
     res.status(200).json({ success: true, data: formattedTables });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -225,6 +237,12 @@ exports.toggleTableStatus = async (req, res) => {
 
     table.isActive = !isDisabled;
     await table.save();
+
+    emitToRestaurant(restaurantId, "TABLE_STATUS_UPDATED", {
+      tableNumber: String(tableNumber),
+      isActive: table.isActive,
+      isDisabled: !table.isActive,
+    });
 
     res.status(200).json({
       success: true,
@@ -270,6 +288,11 @@ exports.moveTableSection = async (req, res) => {
       { upsert: true },
     );
 
+    emitToRestaurant(restaurantId, "TABLES_UPDATED", {
+      action: "SECTION_MOVED",
+      tableNumber: String(tableNumber),
+      section: table.section,
+    });
     res
       .status(200)
       .json({ success: true, message: "Table moved", section: table.section });

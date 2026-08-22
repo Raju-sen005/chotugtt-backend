@@ -1,28 +1,88 @@
-const mongoose = require('mongoose');
-const bcrypt = require('bcryptjs');
+const mongoose = require("mongoose");
+const bcrypt = require("bcryptjs");
 
-const userSchema = new mongoose.Schema({
-  restaurantId: { type: mongoose.Schema.Types.ObjectId, ref: 'Restaurant', required: true },
-  name: { type: String, required: true },
-  email: { type: String, required: true, unique: true, lowercase: true },
-  password: { type: String, required: true },
-  role: { type: String, enum: ['SUPERADMIN','OWNER', 'MANAGER', 'STAFF'], default: 'OWNER' }
-}, { timestamps: true });
+const userSchema = new mongoose.Schema(
+  {
+    restaurantId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Restaurant",
+      required: true,
+      index: true,
+    },
 
-// Hash password before saving
-userSchema.pre('save', async function (next) {
-  if (!this.isModified('password')) return next();
+    name: {
+      type: String,
+      required: true,
+      trim: true,
+      minlength: 2,
+      maxlength: 100,
+    },
+
+    email: {
+      type: String,
+      required: true,
+      unique: true,
+      lowercase: true,
+      trim: true,
+      index: true,
+    },
+
+    password: {
+      type: String,
+      required: true,
+      minlength: 6,
+    },
+
+    role: {
+      type: String,
+      enum: ["SUPERADMIN", "OWNER", "MANAGER", "STAFF"],
+      default: "OWNER",
+      index: true,
+    },
+
+    // Staff/Captain account active/inactive
+    isActive: {
+      type: Boolean,
+      default: true,
+      index: true,
+    },
+
+    lastLoginAt: {
+      type: Date,
+      default: null,
+    },
+  },
+  {
+    timestamps: true,
+  }
+);
+
+// Password hashing
+userSchema.pre("save", async function (next) {
+  if (!this.isModified("password")) {
+    return next();
+  }
+
   const salt = await bcrypt.genSalt(10);
   this.password = await bcrypt.hash(this.password, salt);
+
   next();
 });
 
-// Compare password helper method
+// Password comparison
 userSchema.methods.comparePassword = async function (enteredPassword) {
-  return await bcrypt.compare(enteredPassword, this.password);
+  return bcrypt.compare(enteredPassword, this.password);
 };
 
-// Index for login lookup isolated by tenant context
-userSchema.index({ email: 1, restaurantId: 1 });
+// Tenant based indexes
+userSchema.index({
+  restaurantId: 1,
+  role: 1,
+});
 
-module.exports = mongoose.model('User', userSchema);
+userSchema.index({
+  restaurantId: 1,
+  email: 1,
+});
+
+module.exports = mongoose.model("User", userSchema);

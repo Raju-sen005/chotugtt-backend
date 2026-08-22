@@ -4,15 +4,18 @@ const jwt = require("jsonwebtoken");
 const cloudinary = require("../config/cloudinary"); // Cloudinary configuration import karein
 
 const generateTokenAndSetCookie = (res, userId) => {
-  const token = jwt.sign({ id: userId }, process.env.JWT_SECRET, {
+  const isProduction = process.env.NODE_ENV === "production";
+
+  const token = jwt.sign({ id: String(userId) }, process.env.JWT_SECRET, {
     expiresIn: "7d",
   });
 
   res.cookie("jwt", token, {
     httpOnly: true,
-    secure: true, // Render par HTTPS hota hai, isliye TRUE rakhein
-    sameSite: "none", // Cross-domain (Frontend/Backend alag) ke liye 'none' hi chahiye
-    maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
+    secure: isProduction,
+    sameSite: isProduction ? "none" : "lax",
+    maxAge: 7 * 24 * 60 * 60 * 1000,
+    path: "/",
   });
 
   return token;
@@ -244,6 +247,128 @@ exports.login = async (req, res) => {
   }
 };
 
+exports.captainLogin = async (req, res) => {
+  const { email, password } = req.body;
+
+  try {
+    if (!email || !password) {
+      return res.status(400).json({
+        success: false,
+        message: "Email and password are required",
+      });
+    }
+
+    const cleanEmail = String(email).trim().toLowerCase();
+
+    const user = await User.findOne({
+      email: cleanEmail,
+      role: "STAFF",
+    });
+
+    if (!user) {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid Captain credentials",
+      });
+    }
+
+    if (!user.isActive) {
+      return res.status(403).json({
+        success: false,
+        code: "CAPTAIN_DISABLED",
+        message:
+          "Your Captain account has been disabled. Please contact your restaurant manager.",
+      });
+    }
+
+    const passwordValid = await user.comparePassword(password);
+
+    if (!passwordValid) {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid Captain credentials",
+      });
+    }
+
+    const restaurant = await Restaurant.findById(user.restaurantId).select(
+      "_id name slug logo themeColor isActive subscriptionStatus",
+    );
+
+    if (!restaurant) {
+      return res.status(403).json({
+        success: false,
+        message: "Restaurant account not found",
+      });
+    }
+
+    if (!restaurant.isActive) {
+      return res.status(403).json({
+        success: false,
+        message: "Restaurant account is inactive",
+      });
+    }
+
+    if (
+      restaurant.subscriptionStatus === "PAST_DUE" ||
+      restaurant.subscriptionStatus === "CANCELED"
+    ) {
+      return res.status(403).json({
+        success: false,
+        code: "SUBSCRIPTION_INACTIVE",
+        message: "Restaurant subscription is inactive.",
+      });
+    }
+
+    const token = jwt.sign(
+      {
+        id: user._id,
+      },
+      process.env.JWT_SECRET,
+      {
+        expiresIn: "7d",
+      },
+    );
+
+    res.cookie("jwt", token, {
+      httpOnly: true,
+      secure: true,
+      sameSite: "none",
+      maxAge: 30 * 24 * 60 * 60 * 1000,
+    });
+
+    user.lastLoginAt = new Date();
+
+    await user.save({
+      validateModifiedOnly: true,
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        role: "STAFF",
+        restaurantId: user.restaurantId,
+        restaurant: {
+          id: restaurant._id,
+          name: restaurant.name,
+          slug: restaurant.slug,
+          logo: restaurant.logo,
+          themeColor: restaurant.themeColor,
+        },
+      },
+    });
+  } catch (error) {
+    console.error("captainLogin error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Captain login failed",
+    });
+  }
+};
+
 // @desc    Activate or Renew Subscription after Payment
 // @route   POST /api/v1/auth/renew-subscription
 exports.renewSubscription = async (req, res) => {
@@ -276,12 +401,21 @@ exports.renewSubscription = async (req, res) => {
 
 // @desc    Logout User / Clear Cookie
 // @route   POST /api/v1/auth/logout
+// Replace logout with this version.
 exports.logout = async (req, res) => {
+  const isProduction = process.env.NODE_ENV === "production";
+
   res.cookie("jwt", "", {
     httpOnly: true,
+    secure: isProduction,
+    sameSite: isProduction ? "none" : "lax",
     expires: new Date(0),
-    secure: true, // Same config as login
-    sameSite: "none",
+    maxAge: 0,
+    path: "/",
   });
-  res.status(200).json({ success: true, message: "Logged out successfully" });
+
+  return res.status(200).json({
+    success: true,
+    message: "Logged out successfully",
+  });
 };

@@ -19,6 +19,7 @@ const analyticsRoutes = require("./routes/analyticsRoutes");
 const offerRoutes = require("./routes/offerRoutes");
 const tableRoutes = require("./routes/Tableroutes");
 const sectionRoutes = require("./routes/sectionRoutes");
+const staffRoute = require("./routes/staffRoutes");
 const marketingRoutes = require("./routes/marketingRoutes");
 
 connectDB();
@@ -35,8 +36,8 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 const allowedOrigins = [
-  // "http://localhost:5174", // Captain app / Local frontend 1
-  // "http://localhost:5173", // Restaurant Admin panel / Local frontend 2 (agar ye port hai)
+  "http://localhost:5174", // Captain app / Local frontend 1
+  "http://localhost:5173", // Restaurant Admin panel / Local frontend 2 (agar ye port hai)
   "https://chotu-frontend-ngph.onrender.com", // Production frontend URL (agar ho)
   "https://captain-uw3o.onrender.com",
 ];
@@ -67,6 +68,7 @@ app.use("/offers", offerRoutes);
 app.use("/tables", tableRoutes);
 app.use("/marketing", marketingRoutes);
 app.use("/sections", sectionRoutes);
+app.use("/staff", staffRoute);
 app.use("/admin", protect, restrictTo("SUPERADMIN"), adminRoutes);
 
 const PORT = process.env.PORT || 5000;

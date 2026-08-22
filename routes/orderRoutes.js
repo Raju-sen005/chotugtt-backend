@@ -21,6 +21,13 @@ const tenantContext = require("../middleware/tenant");
 router.post("/place", placeOrder);
 router.post("/counter-place", protect, placeCounterOrder);
 router.get(
+  "/billing/previous", // 🆕
+  protect,
+  authorize("OWNER", "MANAGER", "STAFF"),
+  tenantContext,
+  getPreviousBillingStats,
+);
+router.get(
   "/billing",
   protect,
   authorize("OWNER", "MANAGER", "STAFF"),
@@ -37,9 +44,21 @@ router.get(
   getLiveAdminOrders,
 );
 
-router.get("/:id/kot", protect, getKOTItems);
+router.get(
+  "/:id/kot",
+  protect,
+  authorize("OWNER", "MANAGER", "STAFF"),
+  tenantContext,
+  getKOTItems
+);
 
-router.patch("/:id/kot/printed", protect, markKOTPrinted);
+router.patch(
+  "/:id/kot/printed",
+  protect,
+  authorize("OWNER", "MANAGER", "STAFF"),
+  tenantContext,
+  markKOTPrinted
+);
 
 router.patch(
   "/:id/status",
@@ -64,14 +83,6 @@ router.patch(
   authorize("OWNER", "MANAGER", "STAFF"),
   tenantContext,
   cancelOrderItem,
-);
-
-router.get(
-  "/billing/previous", // 🆕
-  protect,
-  authorize("OWNER", "MANAGER", "STAFF"),
-  tenantContext,
-  getPreviousBillingStats,
 );
 
 router.patch(

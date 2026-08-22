@@ -7,6 +7,7 @@ const Offer = require("../models/Offer");
 const Table = require("../models/Table");
 const { GoogleGenAI } = require("@google/genai");
 // const fs = require("fs/promises");
+const { emitToRestaurant } = require("../services/socketService");
 
 const ai = new GoogleGenAI({
   apiKey: process.env.GEMINI_API_KEY,
@@ -21,6 +22,38 @@ const FALLBACK_IMAGE =
 // ============================================================
 // HELPERS
 // ============================================================
+
+const getTenantId = (req) => {
+  const restaurantId = req.user?.restaurantId;
+
+  if (!restaurantId) {
+    return null;
+  }
+
+  if (typeof restaurantId === "object" && restaurantId._id) {
+    return String(restaurantId._id);
+  }
+
+  return String(restaurantId);
+};
+
+const isValidObjectId = (id) => mongoose.Types.ObjectId.isValid(id);
+
+const safeEmitToRestaurant = (restaurantId, event, payload) => {
+  if (!restaurantId) {
+    return;
+  }
+
+  try {
+    emitToRestaurant(restaurantId, event, payload);
+  } catch (error) {
+    /*
+     * Socket failure MUST NOT make an already
+     * successful DB operation return 500.
+     */
+    console.error(`Socket emit failed [${event}]:`, error.message);
+  }
+};
 
 const uploadBufferToCloudinary = (buffer, folder) => {
   return new Promise((resolve, reject) => {
@@ -145,9 +178,51 @@ function parseAiJsonArray(text) {
 
 exports.createMenuItem = async (req, res) => {
   try {
-    const { name, category, description, price } = req.body;
+    const restaurantId = getTenantId(req);
+
+    if (!restaurantId) {
+      return res.status(403).json({
+        success: false,
+        message: "Restaurant context is missing",
+      });
+    }
+
+    if (!isValidObjectId(restaurantId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid restaurant context",
+      });
+    }
+
+    const name = String(req.body?.name || "").trim();
+    const category = String(req.body?.category || "").trim();
+    const description = String(req.body?.description || "").trim();
+
+    const price = Number(req.body?.price);
+
+    if (!name) {
+      return res.status(400).json({
+        success: false,
+        message: "Menu item name is required",
+      });
+    }
+
+    if (!category) {
+      return res.status(400).json({
+        success: false,
+        message: "Category is required",
+      });
+    }
+
+    if (!Number.isFinite(price) || price < 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid menu item price",
+      });
+    }
 
     let imageUrl = "";
+
     if (req.file) {
       imageUrl = await uploadBufferToCloudinary(
         req.file.buffer,
@@ -156,16 +231,40 @@ exports.createMenuItem = async (req, res) => {
     }
 
     const item = await MenuItem.create({
-      restaurantId: req.user.restaurantId,
+      restaurantId,
       name,
       category,
       description,
       price,
       image: imageUrl,
     });
-    res.status(201).json({ success: true, data: item });
+
+    /*
+     * DB succeeded.
+     * Now notify ONLY this restaurant.
+     */
+    safeEmitToRestaurant(restaurantId, "MENU_ITEM_CREATED", {
+      item,
+      restaurantId,
+    });
+
+    safeEmitToRestaurant(restaurantId, "MENU_CATALOG_UPDATED", {
+      type: "ITEM_CREATED",
+      entityId: String(item._id),
+      restaurantId,
+    });
+
+    return res.status(201).json({
+      success: true,
+      data: item,
+    });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    console.error("Create menu item error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Unable to create menu item",
+    });
   }
 };
 
@@ -180,10 +279,27 @@ exports.extractMenuFromImage = async (req, res) => {
   // let uploadedFilePath = null;
 
   try {
+    const restaurantId = getTenantId(req);
+
+    if (!restaurantId) {
+      return res.status(403).json({
+        success: false,
+        message: "Restaurant context is missing",
+      });
+    }
+
+    if (!isValidObjectId(restaurantId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid restaurant context",
+      });
+    }
+
     if (!req.file) {
-      return res
-        .status(400)
-        .json({ success: false, message: "Please upload a menu image." });
+      return res.status(400).json({
+        success: false,
+        message: "Please upload a menu image.",
+      });
     }
 
     // uploadedFilePath = req.file.path;
@@ -247,7 +363,7 @@ Do not include any text before or after the JSON array.`,
 
     const dishDocs = await Promise.all(
       dishes.map(async (item) => ({
-        restaurantId: req.user.restaurantId,
+        restaurantId,
         name: item.name,
         category: item.category,
         description: item.description || "Delicious freshly prepared dish.",
@@ -259,7 +375,7 @@ Do not include any text before or after the JSON array.`,
 
     const comboDocs = await Promise.all(
       combos.map(async (item) => ({
-        restaurantId: req.user.restaurantId,
+        restaurantId,
         name: item.name,
         description: item.description || "A delicious combo meal deal.",
         price: item.price,
@@ -288,6 +404,13 @@ Do not include any text before or after the JSON array.`,
       await session.endSession();
     }
 
+    safeEmitToRestaurant(restaurantId, "MENU_CATALOG_UPDATED", {
+      type: "AI_IMPORT",
+      restaurantId,
+      itemsCount: insertedItems.length,
+      combosCount: insertedCombos.length,
+    });
+
     res.status(201).json({
       success: true,
       message: `${insertedItems.length} dishes aur ${insertedCombos.length} combos successfully imported!`,
@@ -295,9 +418,23 @@ Do not include any text before or after the JSON array.`,
     });
   } catch (error) {
     console.error("AI Menu Extraction Error:", error);
-    res.status(500).json({
+
+    const status = Number(error?.status);
+
+    if (status === 429 || status === 503 || status >= 500) {
+      return res.status(503).json({
+        success: false,
+        code: "AI_TEMPORARILY_UNAVAILABLE",
+        message:
+          "AI menu extraction is temporarily busy. Please try again in a moment.",
+      });
+    }
+
+    return res.status(500).json({
       success: false,
-      message: error.message || "Failed to process menu image with AI.",
+      code: "AI_MENU_EXTRACTION_FAILED",
+      message:
+        "Unable to extract the menu from this image. Please try another image.",
     });
   } finally {
     // Temp uploaded file cleanup — chahe success ho ya fail, disk pe junk nahi rehna chahiye
@@ -311,16 +448,91 @@ Do not include any text before or after the JSON array.`,
 
 exports.getAdminMenuItems = async (req, res) => {
   try {
-    const items = await MenuItem.find({ restaurantId: req.user.restaurantId });
-    res.status(200).json({ success: true, count: items.length, data: items });
+    const restaurantId = getTenantId(req);
+
+    if (!restaurantId) {
+      return res.status(403).json({
+        success: false,
+        message: "Restaurant context is missing",
+      });
+    }
+
+    if (!isValidObjectId(restaurantId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid restaurant context",
+      });
+    }
+
+    const items = await MenuItem.find({ restaurantId })
+      .sort({ createdAt: -1 })
+      .lean();
+
+    return res.status(200).json({
+      success: true,
+      count: items.length,
+      data: items,
+    });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    console.error("Get admin menu items error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Unable to fetch menu items",
+    });
   }
 };
 
 exports.updateMenuItem = async (req, res) => {
   try {
-    const updates = { ...req.body };
+    const restaurantId = getTenantId(req);
+    const itemId = req.params.id;
+
+    if (!restaurantId) {
+      return res.status(403).json({
+        success: false,
+        message: "Restaurant context is missing",
+      });
+    }
+
+    if (!isValidObjectId(itemId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid menu item ID",
+      });
+    }
+
+    const updates = {};
+
+    if (req.body?.name !== undefined) {
+      updates.name = String(req.body.name).trim();
+    }
+
+    if (req.body?.category !== undefined) {
+      updates.category = String(req.body.category).trim();
+    }
+
+    if (req.body?.description !== undefined) {
+      updates.description = String(req.body.description).trim();
+    }
+
+    if (req.body?.price !== undefined) {
+      const price = Number(req.body.price);
+
+      if (!Number.isFinite(price) || price < 0) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid menu item price",
+        });
+      }
+
+      updates.price = price;
+    }
+
+    if (req.body?.isAvailable !== undefined) {
+      updates.isAvailable =
+        req.body.isAvailable === true || req.body.isAvailable === "true";
+    }
 
     if (req.file) {
       updates.image = await uploadBufferToCloudinary(
@@ -330,36 +542,107 @@ exports.updateMenuItem = async (req, res) => {
     }
 
     const item = await MenuItem.findOneAndUpdate(
-      { _id: req.params.id, restaurantId: req.user.restaurantId },
-      { $set: updates },
-      { new: true },
-    );
+      {
+        _id: itemId,
+        restaurantId,
+      },
+      {
+        $set: updates,
+      },
+      {
+        new: true,
+        runValidators: true,
+      },
+    ).lean();
 
-    if (!item)
-      return res
-        .status(404)
-        .json({ success: false, message: "Item not found in your catalog" });
-    res.status(200).json({ success: true, data: item });
+    if (!item) {
+      return res.status(404).json({
+        success: false,
+        message: "Item not found in your catalog",
+      });
+    }
+
+    safeEmitToRestaurant(restaurantId, "MENU_ITEM_UPDATED", {
+      item,
+      restaurantId,
+    });
+
+    safeEmitToRestaurant(restaurantId, "MENU_CATALOG_UPDATED", {
+      type: "ITEM_UPDATED",
+      entityId: String(item._id),
+      restaurantId,
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: item,
+    });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    console.error("Update menu item error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Unable to update menu item",
+    });
   }
 };
 
 exports.deleteMenuItem = async (req, res) => {
   try {
+    const restaurantId = getTenantId(req);
+    const itemId = req.params.id;
+
+    if (!restaurantId) {
+      return res.status(403).json({
+        success: false,
+        message: "Restaurant context is missing",
+      });
+    }
+
+    if (!isValidObjectId(itemId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid menu item ID",
+      });
+    }
+
     const item = await MenuItem.findOneAndDelete({
-      _id: req.params.id,
-      restaurantId: req.user.restaurantId,
+      _id: itemId,
+      restaurantId,
+    }).lean();
+
+    if (!item) {
+      return res.status(404).json({
+        success: false,
+        message: "Item not found",
+      });
+    }
+
+    safeEmitToRestaurant(restaurantId, "MENU_ITEM_DELETED", {
+      itemId: String(item._id),
+      restaurantId,
     });
-    if (!item)
-      return res
-        .status(404)
-        .json({ success: false, message: "Item not found" });
-    res
-      .status(200)
-      .json({ success: true, message: "Menu item discarded successfully" });
+
+    safeEmitToRestaurant(restaurantId, "MENU_CATALOG_UPDATED", {
+      type: "ITEM_DELETED",
+      entityId: String(item._id),
+      restaurantId,
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "Menu item discarded successfully",
+      data: {
+        deletedId: String(item._id),
+      },
+    });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    console.error("Delete menu item error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Unable to delete menu item",
+    });
   }
 };
 
@@ -369,6 +652,14 @@ exports.deleteMenuItem = async (req, res) => {
 
 exports.createCombo = async (req, res) => {
   try {
+    const restaurantId = getTenantId(req);
+
+    if (!restaurantId) {
+      return res.status(403).json({
+        success: false,
+        message: "Restaurant context is missing",
+      });
+    }
     const { name, description, items, price, discount } = req.body;
 
     let imageUrl = "";
@@ -380,7 +671,7 @@ exports.createCombo = async (req, res) => {
     }
 
     const combo = await Combo.create({
-      restaurantId: req.user.restaurantId,
+      restaurantId,
       name,
       description,
       items: typeof items === "string" ? JSON.parse(items) : items,
@@ -388,6 +679,11 @@ exports.createCombo = async (req, res) => {
       discount,
       category: "COMBO",
       image: imageUrl,
+    });
+
+    safeEmitToRestaurant(restaurantId, "COMBO_CREATED", {
+      combo,
+      restaurantId,
     });
     res.status(201).json({ success: true, data: combo });
   } catch (error) {
@@ -397,16 +693,74 @@ exports.createCombo = async (req, res) => {
 
 exports.getAdminCombos = async (req, res) => {
   try {
-    const combos = await Combo.find({ restaurantId: req.user.restaurantId });
-    res.status(200).json({ success: true, count: combos.length, data: combos });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    const restaurantId = getTenantId(req);
+
+    if (!restaurantId) {
+      return res.status(403).json({
+        success: false,
+        message: "Restaurant context is missing",
+      });
+    }
+
+    if (!isValidObjectId(restaurantId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid restaurant context",
+      });
+    }
+
+    const combos = await Combo.find({ restaurantId })
+      .sort({ createdAt: -1 })
+      .lean();
+
+    return res.status(200).json({
+      success: true,
+      count: combos.length,
+      data: combos,
+    });
+  } catch (error) {
+    console.error("Get admin combos error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Unable to fetch combos",
+    });
   }
 };
 
 exports.updateCombo = async (req, res) => {
   try {
-    const updates = { ...req.body };
+    const restaurantId = getTenantId(req);
+    const comboId = req.params.id;
+
+    if (!restaurantId) {
+      return res.status(403).json({
+        success: false,
+        message: "Restaurant context is missing",
+      });
+    }
+
+    if (!isValidObjectId(comboId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid combo ID",
+      });
+    }
+    const ALLOWED_COMBO_FIELDS = [
+      "name",
+      "description",
+      "price",
+      "discount",
+      "items",
+      "isAvailable",
+    ];
+    const updates = {};
+
+    for (const field of ALLOWED_COMBO_FIELDS) {
+      if (req.body?.[field] !== undefined) {
+        updates[field] = req.body[field];
+      }
+    }
     if (updates.items && typeof updates.items === "string") {
       updates.items = JSON.parse(updates.items);
     }
@@ -418,14 +772,33 @@ exports.updateCombo = async (req, res) => {
     }
 
     const combo = await Combo.findOneAndUpdate(
-      { _id: req.params.id, restaurantId: req.user.restaurantId },
-      { $set: updates },
-      { new: true },
-    );
+      {
+        _id: comboId,
+        restaurantId,
+      },
+      {
+        $set: updates,
+      },
+      {
+        new: true,
+        runValidators: true,
+      },
+    ).lean();
     if (!combo)
       return res
         .status(404)
         .json({ success: false, message: "Combo not found" });
+
+    safeEmitToRestaurant(restaurantId, "COMBO_UPDATED", {
+      combo,
+      restaurantId,
+    });
+
+    safeEmitToRestaurant(restaurantId, "MENU_CATALOG_UPDATED", {
+      type: "COMBO_UPDATED",
+      entityId: String(combo._id),
+      restaurantId,
+    });
     res.status(200).json({ success: true, data: combo });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -434,19 +807,58 @@ exports.updateCombo = async (req, res) => {
 
 exports.deleteCombo = async (req, res) => {
   try {
+    const restaurantId = getTenantId(req);
+    const comboId = req.params.id;
+
+    if (!restaurantId) {
+      return res.status(403).json({
+        success: false,
+        message: "Restaurant context is missing",
+      });
+    }
+
+    if (!isValidObjectId(restaurantId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid restaurant context",
+      });
+    }
+
+    if (!isValidObjectId(comboId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid combo ID",
+      });
+    }
+
     const combo = await Combo.findOneAndDelete({
-      _id: req.params.id,
-      restaurantId: req.user.restaurantId,
+      _id: comboId,
+      restaurantId,
+    }).lean();
+
+    if (!combo) {
+      return res.status(404).json({
+        success: false,
+        message: "Combo not found",
+      });
+    }
+
+    safeEmitToRestaurant(restaurantId, "COMBO_DELETED", {
+      comboId: String(combo._id),
+      restaurantId,
     });
-    if (!combo)
-      return res
-        .status(404)
-        .json({ success: false, message: "Combo not found" });
-    res
-      .status(200)
-      .json({ success: true, message: "Combo discarded successfully" });
+
+    return res.status(200).json({
+      success: true,
+      message: "Combo discarded successfully",
+    });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    console.error("Delete combo error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Unable to delete combo",
+    });
   }
 };
 

@@ -1,13 +1,35 @@
 const express = require("express");
+
 const router = express.Router();
-const { createOffer, getOffers, deleteOffer } = require("../controllers/offerController");
-const { protect } = require("../middleware/auth"); // Apne auth middleware ka path dein
 
-router.route("/")
-  .get(protect, getOffers)
-  .post(protect, createOffer);
+const {
+  createOffer,
+  getOffers,
+  deleteOffer,
+} = require("../controllers/offerController");
 
-router.route("/:id")
-  .delete(protect, deleteOffer);
+const { protect, authorize } = require("../middleware/auth");
+
+const tenantContext = require("../middleware/tenant");
+
+const OFFER_ROLES = ["OWNER", "MANAGER", "STAFF"];
+
+router.get("/", protect, authorize(...OFFER_ROLES), tenantContext, getOffers);
+
+router.post(
+  "/",
+  protect,
+  authorize("OWNER", "MANAGER"),
+  tenantContext,
+  createOffer,
+);
+
+router.delete(
+  "/:id",
+  protect,
+  authorize("OWNER", "MANAGER"),
+  tenantContext,
+  deleteOffer,
+);
 
 module.exports = router;

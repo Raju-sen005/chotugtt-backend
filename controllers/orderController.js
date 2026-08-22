@@ -1,6 +1,10 @@
 const Order = require("../models/Order");
 const Counter = require("../models/Counter");
-const { getIO } = require("../services/socketService");
+const {
+  // getIO,
+  emitToRestaurant,
+  emitToOrder,
+} = require("../services/socketService");
 const axios = require("axios");
 const mongoose = require("mongoose");
 
@@ -104,14 +108,16 @@ exports.placeOrder = async (req, res) => {
 
         await existingOrder.save();
 
-        const io = getIO();
+        // const io = getIO();
         // 1. UI update ke liye
-        io.to(restaurantId.toString()).emit(
+        emitToRestaurant(
+          existingOrder.restaurantId,
           "ORDER_STATUS_UPDATED",
           existingOrder,
         );
         // 2. 🔔 Sound alert ke liye alag se event emit karein
-        io.to(restaurantId.toString()).emit(
+        emitToRestaurant(
+          restaurantId,
           "PLAY_NOTIFICATION_SOUND",
           existingOrder,
         );
@@ -158,8 +164,8 @@ exports.placeOrder = async (req, res) => {
       total: Number(total),
     });
 
-    const io = getIO();
-    io.to(restaurantId.toString()).emit("NEW_ORDER_RECEIVED", newOrder);
+    // const io = getIO();
+    emitToRestaurant(restaurantId, "NEW_ORDER_RECEIVED", newOrder);
 
     res.status(201).json({
       success: true,
@@ -229,12 +235,14 @@ exports.placeCounterOrder = async (req, res) => {
 
         await existingOrder.save();
 
-        const io = getIO();
-        io.to(restaurantId.toString()).emit(
+        // const io = getIO();
+        emitToRestaurant(
+          existingOrder.restaurantId,
           "ORDER_STATUS_UPDATED",
           existingOrder,
         );
-        io.to(restaurantId.toString()).emit(
+        emitToRestaurant(
+          restaurantId,
           "PLAY_NOTIFICATION_SOUND",
           existingOrder,
         );
@@ -282,9 +290,9 @@ exports.placeCounterOrder = async (req, res) => {
       status: "PENDING",
     });
 
-    const io = getIO();
+    // const io = getIO();
 
-    io.to(restaurantId.toString()).emit("NEW_ORDER_RECEIVED", newOrder);
+    emitToRestaurant(restaurantId, "NEW_ORDER_RECEIVED", newOrder);
 
     res.status(201).json({
       success: true,
@@ -354,9 +362,9 @@ exports.updateOrderStatus = async (req, res) => {
 
       await order.save();
 
-      const io = getIO();
+      // const io = getIO();
 
-      io.to(order.restaurantId.toString()).emit("ORDER_STATUS_UPDATED", order);
+      emitToRestaurant(order.restaurantId, "ORDER_STATUS_UPDATED", order);
 
       return res.status(200).json({
         success: true,
@@ -377,9 +385,9 @@ exports.updateOrderStatus = async (req, res) => {
         (item) => item.status !== "REJECTED" && !item.kotPrintedAt,
       );
 
-      const io = getIO();
+      // const io = getIO();
 
-      io.to(order.restaurantId.toString()).emit("ORDER_STATUS_UPDATED", order);
+      emitToRestaurant(order.restaurantId, "ORDER_STATUS_UPDATED", order);
 
       return res.status(200).json({
         success: true,
@@ -607,9 +615,9 @@ exports.completeOrder = async (req, res) => {
     // REALTIME UPDATE
     // ==========================================
 
-    const io = getIO();
+    // const io = getIO();
 
-    io.to(order.restaurantId.toString()).emit("ORDER_STATUS_UPDATED", order);
+    emitToRestaurant(order.restaurantId, "ORDER_STATUS_UPDATED", order);
 
     // ==========================================
     // RESPONSE
@@ -794,9 +802,9 @@ exports.cancelOrderItem = async (req, res) => {
 
     await order.save();
 
-    const io = getIO();
+    // const io = getIO();
 
-    io.to(order.restaurantId.toString()).emit("ORDER_STATUS_UPDATED", order);
+    emitToRestaurant(order.restaurantId, "ORDER_STATUS_UPDATED", order);
 
     return res.status(200).json({
       success: true,
@@ -918,8 +926,8 @@ exports.shiftTableOrder = async (req, res) => {
 
     await order.save();
 
-    const io = getIO();
-    io.to(order.restaurantId.toString()).emit("ORDER_STATUS_UPDATED", order);
+    // const io = getIO();
+    emitToRestaurant(order.restaurantId, "ORDER_STATUS_UPDATED", order);
 
     res.status(200).json({
       success: true,

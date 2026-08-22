@@ -1,159 +1,328 @@
 const mongoose = require("mongoose");
 const Order = require("../models/Order");
 
-// exports.getDashboardStats = async (req, res) => {
-//   try {
-//     // 1. Debugging: Check karo ki req.user.restaurantId aa raha hai ya nahi
-//     console.log("Restaurant ID from req:", req.user.restaurantId);
+const IST_TIMEZONE = "Asia/Kolkata";
 
-//     // Mongoose ObjectId convert karein
-//     const rId = new mongoose.Types.ObjectId(req.user.restaurantId);
-
-//     // 2. Aggregate Pipeline
-//     const stats = await Order.aggregate([
-//       { $match: { restaurantId: rId } }, // Yahan match ho raha hai
-//       { $group: {
-//           _id: null,
-//           today: {
-//             $sum: {
-//               $cond: [
-//                 { $eq: [{ $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } }, new Date().toISOString().split("T")[0]] },
-//                 "$total",
-//                 0
-//               ]
-//             }
-//           },
-//           totalRevenue: { $sum: "$total" },
-//           totalOrders: { $sum: 1 }
-//       }}
-//     ]);
-
-//     // 3. Table Stats
-//     const tableStats = await Order.aggregate([
-//       { $match: { restaurantId: rId } },
-//       { $group: { _id: "$tableNumber", orderCount: { $sum: 1 } } }
-//     ]);
-
-//     // 4. Debug: Check karo ki total stats kya mile
-//     console.log("Aggregation Result:", stats);
-
-//     res.status(200).json({
-//       success: true,
-//       data: {
-//         revenueStats: stats[0] || { today: 0, totalRevenue: 0, totalOrders: 0 },
-//         tableStats,
-//         topItems: [], // Test ke liye khali rakha hai, pehle revenue fix karein
-//         weeklyTrend: []
-//       }
-//     });
-//   } catch (err) {
-//     console.error("Aggregation Error:", err);
-//     res.status(500).json({ success: false, message: err.message });
-//   }
-// };
+const EMPTY_REVENUE = {
+  today: 0,
+  totalRevenue: 0,
+  totalOrders: 0,
+};
 
 exports.getDashboardStats = async (req, res) => {
   try {
-    const rId = new mongoose.Types.ObjectId(req.user.restaurantId);
+    // --------------------------------------------------
+    // TENANT VALIDATION
+    // --------------------------------------------------
+
+    const restaurantId = req.user?.restaurantId;
+
+    if (
+      !restaurantId ||
+      !mongoose.Types.ObjectId.isValid(restaurantId)
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid restaurant context",
+      });
+    }
+
+    const rId = new mongoose.Types.ObjectId(restaurantId);
+
+    // --------------------------------------------------
+    // DATE RANGE
+    // --------------------------------------------------
+
+    const now = new Date();
+
+    const sevenDaysAgo = new Date(now);
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6);
+    sevenDaysAgo.setHours(0, 0, 0, 0);
+
+    // --------------------------------------------------
+    // BASE MATCH
+    // --------------------------------------------------
+
     const baseMatch = {
       restaurantId: rId,
-      status: { $in: ["COMPLETED"] },
+      status: "COMPLETED",
     };
 
-    // 1. Stats (Revenue & Total Orders)
-    const stats = await Order.aggregate([
-      { $match: baseMatch },
+    // --------------------------------------------------
+    // SINGLE MONGODB AGGREGATION
+    // --------------------------------------------------
+
+    const [result] = await Order.aggregate([
       {
-        $group: {
-          _id: null,
-          today: {
-            $sum: {
-              $cond: [
-                {
-                  $eq: [
-                    {
-                      $dateToString: { format: "%Y-%m-%d", date: "$createdAt" },
-                    },
-                    new Date().toISOString().split("T")[0],
-                  ],
+        $match: baseMatch,
+      },
+
+      {
+        $facet: {
+          // --------------------------------------------
+          // REVENUE + TOTAL ORDERS
+          // --------------------------------------------
+
+          revenueStats: [
+            {
+              $group: {
+                _id: null,
+
+                totalRevenue: {
+                  $sum: "$total",
                 },
-                "$total",
-                0,
-              ],
+
+                totalOrders: {
+                  $sum: 1,
+                },
+
+                today: {
+                  $sum: {
+                    $cond: [
+                      {
+                        $eq: [
+                          {
+                            $dateToString: {
+                              format: "%Y-%m-%d",
+                              date: "$createdAt",
+                              timezone: IST_TIMEZONE,
+                            },
+                          },
+                          {
+                            $dateToString: {
+                              format: "%Y-%m-%d",
+                              date: now,
+                              timezone: IST_TIMEZONE,
+                            },
+                          },
+                        ],
+                      },
+                      "$total",
+                      0,
+                    ],
+                  },
+                },
+              },
             },
-          },
-          totalRevenue: { $sum: "$total" },
-          totalOrders: { $sum: 1 },
+          ],
+
+          // --------------------------------------------
+          // TOP SELLING ITEMS
+          // --------------------------------------------
+
+          topItems: [
+            {
+              $unwind: "$items",
+            },
+
+            {
+              $match: {
+                "items.status": "ACTIVE",
+              },
+            },
+
+            {
+              $group: {
+                _id: "$items.name",
+
+                count: {
+                  $sum: "$items.quantity",
+                },
+              },
+            },
+
+            {
+              $sort: {
+                count: -1,
+                _id: 1,
+              },
+            },
+
+            {
+              $limit: 5,
+            },
+          ],
+
+          // --------------------------------------------
+          // WEEKLY TREND
+          // --------------------------------------------
+
+          weeklyTrend: [
+            {
+              $match: {
+                createdAt: {
+                  $gte: sevenDaysAgo,
+                },
+              },
+            },
+
+            {
+              $group: {
+                _id: {
+                  $dateToString: {
+                    format: "%Y-%m-%d",
+                    date: "$createdAt",
+                    timezone: IST_TIMEZONE,
+                  },
+                },
+
+                sales: {
+                  $sum: "$total",
+                },
+              },
+            },
+
+            {
+              $sort: {
+                _id: 1,
+              },
+            },
+          ],
+
+          // --------------------------------------------
+          // TABLE STATS
+          // --------------------------------------------
+
+          tableStats: [
+            {
+              $group: {
+                _id: "$tableNumber",
+
+                orderCount: {
+                  $sum: 1,
+                },
+              },
+            },
+
+            {
+              $sort: {
+                orderCount: -1,
+                _id: 1,
+              },
+            },
+          ],
+
+          // --------------------------------------------
+          // HOURLY STATS — IST
+          // --------------------------------------------
+
+          hourlyStats: [
+            {
+              $project: {
+                hour: {
+                  $hour: {
+                    date: "$createdAt",
+                    timezone: IST_TIMEZONE,
+                  },
+                },
+              },
+            },
+
+            {
+              $group: {
+                _id: "$hour",
+
+                count: {
+                  $sum: 1,
+                },
+              },
+            },
+
+            {
+              $sort: {
+                _id: 1,
+              },
+            },
+          ],
         },
       },
     ]);
 
-    // 2. Top Selling Items
-    const topItems = await Order.aggregate([
-      { $match: baseMatch },
-      { $unwind: "$items" },
-      { $group: { _id: "$items.name", count: { $sum: "$items.quantity" } } },
-      { $sort: { count: -1 } },
-      { $limit: 5 },
-    ]);
+    // --------------------------------------------------
+    // NORMALIZE RESPONSE
+    // --------------------------------------------------
 
-    // 3. Weekly Trend (Last 7 days)
-    const sevenDaysAgo = new Date();
-    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-    const weeklyTrend = await Order.aggregate([
-      {
-        $match: {
-          ...baseMatch,
-          createdAt: { $gte: sevenDaysAgo },
-        },
-      },
-      {
-        $group: {
-          _id: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } },
-          sales: { $sum: "$total" },
-        },
-      },
-      { $sort: { _id: 1 } },
-    ]);
+    const revenueStats =
+      result?.revenueStats?.[0] || EMPTY_REVENUE;
 
-    // 4. Table Stats
-    const tableStats = await Order.aggregate([
-      { $match: baseMatch },
-      { $group: { _id: "$tableNumber", orderCount: { $sum: 1 } } },
-    ]);
+    const topItems =
+      result?.topItems || [];
 
-    // 5. NEW: Hourly Stats (India Timezone: +5.5 hours = 19800000ms)
-    const hourlyStats = await Order.aggregate([
-      { $match: baseMatch },
-      {
-        $project: {
-          // Timezone adjustment for IST
-          hour: { $hour: { $add: ["$createdAt", 19800000] } },
-        },
-      },
-      {
-        $group: {
-          _id: "$hour",
-          count: { $sum: 1 },
-        },
-      },
-      { $sort: { _id: 1 } },
-    ]);
+    const tableStats =
+      result?.tableStats || [];
 
-    res.status(200).json({
+    const hourlyStats =
+      result?.hourlyStats || [];
+
+    // --------------------------------------------------
+    // GUARANTEE LAST 7 DAYS
+    // --------------------------------------------------
+
+    const weeklyMap = new Map(
+      (result?.weeklyTrend || []).map(
+        (item) => [item._id, item.sales]
+      )
+    );
+
+    const weeklyTrend = [];
+
+    for (let i = 0; i < 7; i += 1) {
+      const date = new Date(sevenDaysAgo);
+
+      date.setDate(
+        sevenDaysAgo.getDate() + i
+      );
+
+      const day = date.toLocaleDateString(
+        "en-CA",
+        {
+          timeZone: IST_TIMEZONE,
+        }
+      );
+
+      weeklyTrend.push({
+        day,
+        sales: weeklyMap.get(day) || 0,
+      });
+    }
+
+    // --------------------------------------------------
+    // RESPONSE
+    // --------------------------------------------------
+
+    return res.status(200).json({
       success: true,
+
       data: {
-        revenueStats: stats[0] || { today: 0, totalRevenue: 0, totalOrders: 0 },
+        revenueStats: {
+          today:
+            Number(revenueStats.today) || 0,
+
+          totalRevenue:
+            Number(revenueStats.totalRevenue) || 0,
+
+          totalOrders:
+            Number(revenueStats.totalOrders) || 0,
+        },
+
         tableStats,
+
         topItems,
-        weeklyTrend: weeklyTrend.map((item) => ({
-          day: item._id,
-          sales: item.sales,
-        })),
+
+        weeklyTrend,
+
         hourlyStats,
       },
     });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+  } catch (error) {
+    console.error(
+      "❌ Dashboard analytics error:",
+      error
+    );
+
+    return res.status(500).json({
+      success: false,
+      message: "Unable to load analytics data",
+    });
   }
 };
