@@ -65,7 +65,13 @@ exports.placeOrder = async (req, res) => {
       tableToken,
       mergeWithTable,
     } = req.body;
-
+    // 🔴 IMPORTANT
+    if (!restaurantId) {
+      return res.status(400).json({
+        success: false,
+        message: "Restaurant ID is required to place order",
+      });
+    }
     const decodedTable = decodeTableToken(tableToken);
     const cleanMergeTable =
       mergeWithTable && String(mergeWithTable).trim()
