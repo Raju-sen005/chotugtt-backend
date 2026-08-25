@@ -183,6 +183,310 @@ exports.placeOrder = async (req, res) => {
   }
 };
 
+// ============================================================
+// 👨‍✈️ CAPTAIN POS - PLACE CUSTOMER ORDER
+// Captain App se customer ka order place karne ke liye
+// Counter POS API se completely separate
+// ============================================================
+
+// @desc    Captain placing customer order
+// @route   POST /api/v1/orders/captain-place
+// @desc    Captain placing customer order
+// @route   POST /api/v1/orders/captain-place
+exports.placeCaptainOrder = async (req, res) => {
+  try {
+    // =========================================================
+    // CAPTAIN AUTH
+    // =========================================================
+
+    const captain = req.user;
+
+    if (!captain) {
+      return res.status(401).json({
+        success: false,
+        message: "Captain authentication required",
+      });
+    }
+
+    if (captain.role !== "STAFF") {
+      return res.status(403).json({
+        success: false,
+        message: "Only Captain accounts can place Captain orders",
+      });
+    }
+
+    // IMPORTANT:
+    // Restaurant ID body se nahi lenge.
+    // Logged-in Captain ke JWT/user context se lenge.
+    const restaurantId = captain.restaurantId;
+
+    if (!restaurantId) {
+      return res.status(400).json({
+        success: false,
+        message: "Restaurant ID is required to place order",
+      });
+    }
+
+    // =========================================================
+    // REQUEST BODY
+    // Same payload as /place
+    // =========================================================
+
+    const {
+      customerName,
+      customerPhone,
+      orderType,
+      items,
+      subtotal,
+      discount,
+      tax,
+      total,
+      deliveryAddress,
+      tableToken,
+      mergeWithTable,
+    } = req.body;
+
+    // =========================================================
+    // BASIC VALIDATION
+    // =========================================================
+
+    if (!items || !Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Order items are required",
+      });
+    }
+
+    if (!orderType) {
+      return res.status(400).json({
+        success: false,
+        message: "Order type is required",
+      });
+    }
+
+    // =========================================================
+    // TABLE TOKEN
+    // EXACT SAME LOGIC AS placeOrder
+    // =========================================================
+
+    const decodedTable = decodeTableToken(tableToken);
+
+    const cleanMergeTable =
+      mergeWithTable && String(mergeWithTable).trim()
+        ? String(mergeWithTable).trim()
+        : null;
+
+    const tablesInvolved = [decodedTable, cleanMergeTable].filter(
+      (t) => t && t !== "N/A",
+    );
+
+    // =========================================================
+    // EXISTING RUNNING ORDER
+    // EXACT SAME LOGIC AS placeOrder
+    // =========================================================
+
+    if (tablesInvolved.length) {
+      const existingOrder = await Order.findOne({
+        restaurantId,
+        status: {
+          $in: ["ACCEPTED", "PENDING"],
+        },
+        $or: [
+          {
+            tableNumber: {
+              $in: tablesInvolved,
+            },
+          },
+          {
+            mergedTables: {
+              $in: tablesInvolved,
+            },
+          },
+        ],
+      });
+
+      if (existingOrder) {
+        // -----------------------------------------------
+        // APPEND ITEMS
+        // -----------------------------------------------
+
+        existingOrder.items.push(...items);
+
+        existingOrder.subtotal =
+          Number(existingOrder.subtotal || 0) + Number(subtotal || 0);
+
+        existingOrder.discount =
+          Number(existingOrder.discount || 0) + Number(discount || 0);
+
+        existingOrder.tax = Number(existingOrder.tax || 0) + Number(tax || 0);
+
+        existingOrder.total =
+          Number(existingOrder.total || 0) + Number(total || 0);
+
+        // -----------------------------------------------
+        // RECALCULATE TAX RATE
+        // -----------------------------------------------
+
+        const combinedTaxableAmount =
+          existingOrder.subtotal - existingOrder.discount;
+
+        existingOrder.taxRate =
+          combinedTaxableAmount > 0
+            ? existingOrder.tax / combinedTaxableAmount
+            : 0;
+
+        // -----------------------------------------------
+        // CUSTOMER DETAILS
+        // -----------------------------------------------
+
+        if (customerName && String(customerName).trim()) {
+          existingOrder.customerName = String(customerName).trim();
+        }
+
+        if (customerPhone && String(customerPhone).trim()) {
+          existingOrder.customerPhone = String(customerPhone).trim();
+        }
+
+        // -----------------------------------------------
+        // SAVE
+        // -----------------------------------------------
+
+        await existingOrder.save();
+
+        // -----------------------------------------------
+        // REALTIME UPDATE
+        // -----------------------------------------------
+
+        emitToRestaurant(
+          existingOrder.restaurantId,
+          "ORDER_STATUS_UPDATED",
+          existingOrder,
+        );
+
+        emitToRestaurant(
+          restaurantId,
+          "PLAY_NOTIFICATION_SOUND",
+          existingOrder,
+        );
+
+        return res.status(200).json({
+          success: true,
+          isExistingOrder: true,
+          message: "Items added to your running order successfully!",
+          order: existingOrder,
+        });
+      }
+    }
+
+    // =========================================================
+    // DELIVERY VALIDATION
+    // Same as placeOrder
+    // =========================================================
+
+    if (
+      orderType === "DELIVERY" &&
+      (!deliveryAddress || deliveryAddress.length < 5)
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Delivery address is required for delivery orders",
+      });
+    }
+
+    // =========================================================
+    // GENERATE ORDER ID
+    // =========================================================
+
+    const uniqueOrderId = await generateReadableOrderId(restaurantId);
+
+    // =========================================================
+    // TAX RATE
+    // =========================================================
+
+    const numericSubtotal = Number(subtotal) || 0;
+
+    const numericDiscount = Number(discount) || 0;
+
+    const numericTax = Number(tax) || 0;
+
+    const numericTotal = Number(total) || 0;
+
+    const taxableAmount = Math.max(0, numericSubtotal - numericDiscount);
+
+    const taxRate = taxableAmount > 0 ? numericTax / taxableAmount : 0;
+
+    // =========================================================
+    // CREATE CAPTAIN ORDER
+    // =========================================================
+
+    const newOrder = await Order.create({
+      restaurantId,
+
+      orderId: uniqueOrderId,
+
+      customerName:
+        customerName && String(customerName).trim()
+          ? String(customerName).trim()
+          : "Captain Walk-in",
+
+      customerPhone:
+        customerPhone && String(customerPhone).trim()
+          ? String(customerPhone).trim()
+          : "0000000000",
+
+      orderType,
+
+      // IMPORTANT:
+      // tableToken se actual table number
+      tableNumber: decodedTable,
+
+      mergedTables: cleanMergeTable ? [cleanMergeTable] : [],
+
+      deliveryAddress: deliveryAddress || "",
+
+      items,
+
+      subtotal: numericSubtotal,
+
+      discount: numericDiscount,
+
+      tax: numericTax,
+
+      taxRate,
+
+      total: numericTotal,
+
+      status: "PENDING",
+    });
+
+    // =========================================================
+    // REALTIME EVENTS
+    // =========================================================
+
+    emitToRestaurant(restaurantId, "NEW_ORDER_RECEIVED", newOrder);
+
+    emitToRestaurant(restaurantId, "PLAY_NOTIFICATION_SOUND", newOrder);
+
+    // =========================================================
+    // RESPONSE
+    // =========================================================
+
+    return res.status(201).json({
+      success: true,
+      isExistingOrder: false,
+      message: "Captain order placed successfully",
+      order: newOrder,
+    });
+  } catch (error) {
+    console.error("Captain Place Order Error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: error.message || "Failed to place Captain order",
+    });
+  }
+};
+
 // @desc    Owner placing counter order (Parcel or Append to Table)
 // @route   POST /api/v1/orders/counter-place
 exports.placeCounterOrder = async (req, res) => {
@@ -943,5 +1247,121 @@ exports.shiftTableOrder = async (req, res) => {
   } catch (error) {
     console.error("Shift Table Error:", error);
     res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.updateDueCustomerDetails = async (req, res) => {
+  try {
+    const { customerName, customerPhone } = req.body;
+
+    const order = await Order.findOne({
+      _id: req.params.id,
+      restaurantId: req.user.restaurantId,
+      paymentMethod: "DUE",
+      paymentStatus: "DUE",
+    });
+
+    if (!order) {
+      return res.status(404).json({
+        success: false,
+        message: "Due bill not found",
+      });
+    }
+
+    const cleanName = String(customerName || "").trim();
+    const cleanPhone = String(customerPhone || "").trim();
+
+    if (!cleanName) {
+      return res.status(400).json({
+        success: false,
+        message: "Customer name is required",
+      });
+    }
+
+    if (cleanPhone && !/^\d{10}$/.test(cleanPhone)) {
+      return res.status(400).json({
+        success: false,
+        message: "Mobile number must be exactly 10 digits",
+      });
+    }
+
+    order.customerName = cleanName;
+    order.customerPhone = cleanPhone;
+
+    await order.save();
+
+    emitToRestaurant(order.restaurantId, "ORDER_STATUS_UPDATED", order);
+
+    return res.status(200).json({
+      success: true,
+      message: "Customer details updated successfully",
+      data: order,
+    });
+  } catch (error) {
+    console.error("Update Due Customer Error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+exports.settleDuePayment = async (req, res) => {
+  try {
+    const { paymentMethod } = req.body;
+
+    if (!["CASH", "UPI"].includes(paymentMethod)) {
+      return res.status(400).json({
+        success: false,
+        message: "Payment method must be CASH or UPI",
+      });
+    }
+
+    const order = await Order.findOne({
+      _id: req.params.id,
+      restaurantId: req.user.restaurantId,
+      paymentMethod: "DUE",
+      paymentStatus: "DUE",
+    });
+
+    if (!order) {
+      return res.status(404).json({
+        success: false,
+        message: "Due bill not found or already settled",
+      });
+    }
+
+    const totalAmount = Number(order.total || 0);
+
+    if (totalAmount <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid bill amount",
+      });
+    }
+
+    order.paymentMethod = paymentMethod;
+    order.paymentStatus = "PAID";
+    order.paidAmount = totalAmount;
+    order.dueAmount = 0;
+    order.paymentCollectedAt = new Date();
+
+    await order.save();
+
+    emitToRestaurant(order.restaurantId, "ORDER_STATUS_UPDATED", order);
+
+    return res.status(200).json({
+      success: true,
+      message: `Due payment settled successfully via ${paymentMethod}`,
+      data: order,
+    });
+  } catch (error) {
+    console.error("Settle Due Payment Error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
   }
 };

@@ -208,21 +208,49 @@ exports.login = async (req, res) => {
   const { email, password } = req.body;
 
   try {
-    if (!email || !password)
-      return res
-        .status(400)
-        .json({ success: false, message: "Please provide email and password" });
+    if (!email || !password) {
+      return res.status(400).json({
+        success: false,
+        message: "Please provide email and password",
+      });
+    }
 
-    const user = await User.findOne({ email });
+    const user = await User.findOne({
+      email: String(email).trim().toLowerCase(),
+    });
+
     if (!user || !(await user.comparePassword(password))) {
-      return res
-        .status(401)
-        .json({ success: false, message: "Invalid credentials" });
+      return res.status(401).json({
+        success: false,
+        message: "Invalid credentials",
+      });
+    }
+
+    // =====================================================
+    // RESTAURANT WEB LOGIN ROLE RESTRICTION
+    // Only SUPERADMIN, OWNER and MANAGER can login here
+    // =====================================================
+    const allowedRoles = ["SUPERADMIN", "OWNER", "MANAGER"];
+
+    if (!allowedRoles.includes(user.role)) {
+      return res.status(403).json({
+        success: false,
+        code: "ROLE_NOT_ALLOWED",
+        message:
+          "This account is not allowed to access the Restaurant Dashboard. Please use the appropriate login.",
+      });
     }
 
     const restaurant = await Restaurant.findById(user.restaurantId);
 
-    // Check: Agar user SUPERADMIN nahi hai, TABHI isActive check karein
+    if (!restaurant) {
+      return res.status(403).json({
+        success: false,
+        message: "Restaurant account not found",
+      });
+    }
+
+    // SUPERADMIN can bypass restaurant active check
     if (user.role !== "SUPERADMIN" && !restaurant.isActive) {
       return res.status(403).json({
         success: false,
@@ -231,8 +259,9 @@ exports.login = async (req, res) => {
       });
     }
 
-    // --- NEW: SUBSCRIPTION & RENEWAL CHECK ---
-    // Agar owner hai, toh check karo ki subscription active hai ya nahi
+    // =====================================================
+    // SUBSCRIPTION CHECK
+    // =====================================================
     if (user.role === "OWNER") {
       const isPastDue = restaurant.subscriptionStatus === "PAST_DUE";
       const isCanceled = restaurant.subscriptionStatus === "CANCELED";
@@ -240,18 +269,20 @@ exports.login = async (req, res) => {
       if (isPastDue || isCanceled) {
         return res.status(403).json({
           success: false,
-          requiresSubscription: true, // Frontend isse catch karke payment page par bhejega
+          requiresSubscription: true,
           restaurantId: restaurant._id,
           message:
             "Your subscription has expired or is past due. Please renew to access your dashboard.",
         });
       }
     }
-    // ----------------------------------------
 
+    // =====================================================
+    // CREATE LOGIN SESSION
+    // =====================================================
     generateTokenAndSetCookie(res, user._id);
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       data: {
         id: user._id,
@@ -263,7 +294,12 @@ exports.login = async (req, res) => {
       },
     });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    console.error("login error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
   }
 };
 

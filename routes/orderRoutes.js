@@ -2,6 +2,7 @@ const express = require("express");
 const router = express.Router();
 const {
   placeOrder,
+  placeCaptainOrder,
   placeCounterOrder,
   updateOrderStatus,
   getLiveAdminOrders,
@@ -13,12 +14,15 @@ const {
   markKOTPrinted,
   shiftTableOrder,
   getTableOrder,
+  updateDueCustomerDetails,
+  settleDuePayment,
 } = require("../controllers/orderController");
 const { protect, authorize } = require("../middleware/auth");
 const tenantContext = require("../middleware/tenant");
 
 // Public checkout route interface target
 router.post("/place", placeOrder);
+router.post("/captain-place", protect, placeCaptainOrder);
 router.post("/counter-place", protect, placeCounterOrder);
 router.get(
   "/billing/previous", // 🆕
@@ -49,7 +53,7 @@ router.get(
   protect,
   authorize("OWNER", "MANAGER", "STAFF"),
   tenantContext,
-  getKOTItems
+  getKOTItems,
 );
 
 router.patch(
@@ -57,7 +61,7 @@ router.patch(
   protect,
   authorize("OWNER", "MANAGER", "STAFF"),
   tenantContext,
-  markKOTPrinted
+  markKOTPrinted,
 );
 
 router.patch(
@@ -99,4 +103,8 @@ router.get(
   tenantContext,
   getTableOrder,
 );
+
+router.patch("/:id/due-details", protect, updateDueCustomerDetails);
+
+router.patch("/:id/settle-due", protect, settleDuePayment);
 module.exports = router;
