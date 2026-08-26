@@ -38,6 +38,7 @@ app.use(express.urlencoded({ extended: true }));
 const allowedOrigins = [
   "http://localhost:5174", // Captain app / Local frontend 1
   "http://localhost:5173", // Restaurant Admin panel / Local frontend 2 (agar ye port hai)
+  "http://localhost:8081",
   "https://chotu-frontend-ngph.onrender.com", // Production frontend URL (agar ho)
   "https://captain-uw3o.onrender.com",
 ];

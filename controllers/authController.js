@@ -22,13 +22,9 @@ const cloudinary = require("../config/cloudinary"); // Cloudinary configuration 
 // };
 
 const generateTokenAndSetCookie = (res, userId) => {
-  const token = jwt.sign(
-    { id: String(userId) },
-    process.env.JWT_SECRET,
-    {
-      expiresIn: "7d",
-    }
-  );
+  const token = jwt.sign({ id: String(userId) }, process.env.JWT_SECRET, {
+    expiresIn: "7d",
+  });
 
   res.cookie("jwt", token, {
     httpOnly: true,
@@ -413,6 +409,7 @@ exports.captainLogin = async (req, res) => {
           logo: restaurant.logo,
           themeColor: restaurant.themeColor,
         },
+        token,
       },
     });
   } catch (error) {
@@ -462,13 +459,13 @@ exports.logout = async (req, res) => {
   const isProduction = process.env.NODE_ENV === "production";
 
   res.cookie("jwt", "", {
-  httpOnly: true,
-  secure: true,
-  sameSite: "none",
-  expires: new Date(0),
-  maxAge: 0,
-  path: "/",
-});
+    httpOnly: true,
+    secure: true,
+    sameSite: "none",
+    expires: new Date(0),
+    maxAge: 0,
+    path: "/",
+  });
 
   return res.status(200).json({
     success: true,

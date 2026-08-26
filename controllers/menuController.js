@@ -483,6 +483,131 @@ exports.getAdminMenuItems = async (req, res) => {
   }
 };
 
+
+// ============================================================
+// CAPTAIN MENU
+// GET /menu/captain
+// ============================================================
+
+exports.getCaptainMenu = async (req, res) => {
+  try {
+    const restaurantId = req.user?.restaurantId;
+
+    if (!restaurantId) {
+      return res.status(400).json({
+        success: false,
+        message: "Restaurant context missing",
+      });
+    }
+
+    // --------------------------------------------------------
+    // Fetch available menu items
+    // --------------------------------------------------------
+
+    const items = await MenuItem.find({
+      restaurantId,
+      isAvailable: true,
+    })
+      .sort({
+        category: 1,
+        name: 1,
+      })
+      .lean();
+
+    // --------------------------------------------------------
+    // Fetch active combos
+    // --------------------------------------------------------
+    
+    const combos = await Combo.find({
+      restaurantId,
+      isAvailable: true,
+    })
+      .sort({
+        name: 1,
+      })
+      .lean();
+
+    // --------------------------------------------------------
+    // Group items by category
+    // --------------------------------------------------------
+
+    const categoriesMap = {};
+
+    items.forEach((item) => {
+      const category = item.category || "Other";
+
+      if (!categoriesMap[category]) {
+        categoriesMap[category] = [];
+      }
+
+      categoriesMap[category].push({
+        _id: item._id,
+        itemType: "SINGLE",
+        name: item.name,
+        category: item.category,
+        description: item.description || "",
+        image: item.image || "",
+        price: item.price,
+        isAvailable: item.isAvailable,
+      });
+    });
+
+    const categories = Object.entries(categoriesMap).map(
+      ([name, categoryItems]) => ({
+        name,
+        items: categoryItems,
+      }),
+    );
+
+    // --------------------------------------------------------
+    // Normalize combos
+    // --------------------------------------------------------
+
+    const formattedCombos = combos.map((combo) => ({
+      _id: combo._id,
+      itemType: "COMBO",
+      name: combo.name,
+      category: combo.category || "Combos",
+      description: combo.description || "",
+      image: combo.image || "",
+      price: combo.price,
+      isAvailable:
+        combo.isAvailable !== false,
+      items: combo.items || [],
+    }));
+
+    // --------------------------------------------------------
+    // Response
+    // --------------------------------------------------------
+
+    return res.status(200).json({
+      success: true,
+
+      data: {
+        items,
+        combos: formattedCombos,
+        categories,
+
+        counts: {
+          items: items.length,
+          combos: formattedCombos.length,
+        },
+      },
+    });
+  } catch (error) {
+    console.error(
+      "GET CAPTAIN MENU ERROR:",
+      error,
+    );
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch captain menu",
+      error: error.message,
+    });
+  }
+};
+
 exports.updateMenuItem = async (req, res) => {
   try {
     const restaurantId = getTenantId(req);
