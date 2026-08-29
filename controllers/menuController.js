@@ -2,6 +2,7 @@ const mongoose = require("mongoose");
 const MenuItem = require("../models/MenuItem");
 const Restaurant = require("../models/Restaurant");
 const cloudinary = require("../config/cloudinary");
+const { verifyTableToken } = require("../utils/tableToken");
 const Combo = require("../models/Combo");
 const Offer = require("../models/Offer");
 const Table = require("../models/Table");
@@ -483,7 +484,6 @@ exports.getAdminMenuItems = async (req, res) => {
   }
 };
 
-
 // ============================================================
 // CAPTAIN MENU
 // GET /menu/captain
@@ -517,7 +517,7 @@ exports.getCaptainMenu = async (req, res) => {
     // --------------------------------------------------------
     // Fetch active combos
     // --------------------------------------------------------
-    
+
     const combos = await Combo.find({
       restaurantId,
       isAvailable: true,
@@ -571,8 +571,7 @@ exports.getCaptainMenu = async (req, res) => {
       description: combo.description || "",
       image: combo.image || "",
       price: combo.price,
-      isAvailable:
-        combo.isAvailable !== false,
+      isAvailable: combo.isAvailable !== false,
       items: combo.items || [],
     }));
 
@@ -595,10 +594,7 @@ exports.getCaptainMenu = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error(
-      "GET CAPTAIN MENU ERROR:",
-      error,
-    );
+    console.error("GET CAPTAIN MENU ERROR:", error);
 
     return res.status(500).json({
       success: false,
@@ -1005,15 +1001,31 @@ exports.getPublicCatalog = async (req, res) => {
     let tableNumber = null;
 
     if (tableToken) {
-      try {
-        const decoded = Buffer.from(tableToken, "base64").toString("utf8");
-        tableNumber = decoded.split("-TABLE-")[1];
-      } catch (err) {
+      const result = verifyTableToken(tableToken);
+
+      if (!result.valid) {
         return res.status(400).json({
           success: false,
-          message: "Invalid QR Code",
+          message: "Invalid or tampered QR code",
         });
       }
+
+      if (String(result.restaurantId) !== String(restaurantId)) {
+        return res.status(400).json({
+          success: false,
+          message: "This QR does not belong to this restaurant",
+        });
+      }
+
+      if ((restaurant.qrTokenVersion || 0) !== result.tokenVersion) {
+        return res.status(400).json({
+          success: false,
+          code: "TABLE_QR_EXPIRED",
+          message: "This QR has expired. Please rescan the table QR code.",
+        });
+      }
+
+      tableNumber = result.tableNumber;
     }
 
     if (tableNumber) {

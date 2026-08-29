@@ -4,6 +4,39 @@ const Table = require("../models/Table");
 const Section = require("../models/Section");
 const { emitToRestaurant } = require("../services/socketService");
 
+const Restaurant = require("../models/Restaurant");
+const { signTableToken, isValidTableNumber } = require("../utils/tableToken");
+
+exports.getAdminTableList = async (req, res) => {
+  try {
+    const restaurantId = req.user.restaurantId;
+
+    const [tables, restaurant] = await Promise.all([
+      Table.find({ restaurantId })
+        .select("tableNumber isActive section")
+        .sort({ createdAt: 1 })
+        .lean(),
+      Restaurant.findById(restaurantId).select("qrTokenVersion").lean(),
+    ]);
+    const tokenVersion = restaurant?.qrTokenVersion || 0;
+
+    const formattedTables = tables.map((t) => ({
+      tableNumber: t.tableNumber,
+      isDisabled: !t.isActive,
+      section: t.section || "General",
+      token: signTableToken({
+        restaurantId,
+        tableNumber: t.tableNumber,
+        tokenVersion,
+      }),
+    }));
+
+    res.status(200).json({ success: true, data: formattedTables });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 // @desc    Konse tables abhi free hain (customer merge-picker ke liye) — public
 // @route   GET /tables/public/:restaurantId
 exports.getPublicFreeTables = async (req, res) => {
@@ -86,24 +119,22 @@ exports.getTableStatusForAdmin = async (req, res) => {
   }
 };
 
-// @desc    Admin ke table list ko fetch karna (StoreSettings load pe) — ab section-wise
-// @route   GET /tables/admin
-exports.getAdminTableList = async (req, res) => {
+// @route POST /tables/admin/regenerate-tokens  (OWNER only)
+exports.regenerateAllTableTokens = async (req, res) => {
   try {
-    const tables = await Table.find({
-      restaurantId: req.user.restaurantId,
-    })
-      .select("tableNumber isActive section")
-      .sort({ createdAt: 1 })
-      .lean();
+    const restaurantId = req.user.restaurantId;
+    const restaurant = await Restaurant.findByIdAndUpdate(
+      restaurantId,
+      { $inc: { qrTokenVersion: 1 } },
+      { new: true },
+    ).select("qrTokenVersion");
 
-    const formattedTables = tables.map((t) => ({
-      tableNumber: t.tableNumber,
-      isDisabled: !t.isActive,
-      section: t.section || "General",
-    }));
-
-    res.status(200).json({ success: true, data: formattedTables });
+    emitToRestaurant(restaurantId, "TABLES_UPDATED", {
+      action: "TOKENS_REGENERATED",
+    });
+    res
+      .status(200)
+      .json({ success: true, qrTokenVersion: restaurant.qrTokenVersion });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -121,6 +152,12 @@ exports.addAdminTable = async (req, res) => {
     }
 
     const clean = String(tableNumber).trim();
+    if (!isValidTableNumber(clean)) {
+      return res.status(400).json({
+        success: false,
+        message: "Table name can't contain ':' or '.' characters",
+      });
+    }
     const cleanSection =
       section && String(section).trim() ? String(section).trim() : "General";
     const restaurantId = req.user.restaurantId;
@@ -155,6 +192,11 @@ exports.addAdminTable = async (req, res) => {
       { upsert: true },
     );
 
+    const restaurant = await Restaurant.findById(restaurantId)
+      .select("qrTokenVersion")
+      .lean();
+    const tokenVersion = restaurant?.qrTokenVersion || 0;
+
     const tables = await Table.find({ restaurantId, isActive: true })
       .select("tableNumber isActive section")
       .sort({ createdAt: 1 })
@@ -164,6 +206,11 @@ exports.addAdminTable = async (req, res) => {
       tableNumber: t.tableNumber,
       isDisabled: !t.isActive,
       section: t.section || "General",
+      token: signTableToken({
+        restaurantId,
+        tableNumber: t.tableNumber,
+        tokenVersion,
+      }),
     }));
     emitToRestaurant(restaurantId, "TABLES_UPDATED", {
       action: "CREATED",

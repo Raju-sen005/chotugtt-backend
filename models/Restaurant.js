@@ -24,6 +24,7 @@ const restaurantSchema = new mongoose.Schema(
     upiId: { type: String, default: "" },
     upiQrCode: { type: String, default: "" },
     qrCodeUrl: { type: String, default: "" },
+    qrTokenVersion: { type: Number, default: 0 },
     subscriptionPlan: {
       type: String,
       enum: ["STARTER", "PRO", "ENTERPRISE"],

@@ -21,7 +21,7 @@ const tableRoutes = require("./routes/Tableroutes");
 const sectionRoutes = require("./routes/sectionRoutes");
 const staffRoute = require("./routes/staffRoutes");
 const marketingRoutes = require("./routes/marketingRoutes");
-
+const roomRoutes = require("./routes/roomRoutes");
 connectDB();
 
 const app = express();
@@ -70,6 +70,7 @@ app.use("/tables", tableRoutes);
 app.use("/marketing", marketingRoutes);
 app.use("/sections", sectionRoutes);
 app.use("/staff", staffRoute);
+app.use("/rooms", roomRoutes);
 app.use("/admin", protect, restrictTo("SUPERADMIN"), adminRoutes);
 
 const PORT = process.env.PORT || 5000;

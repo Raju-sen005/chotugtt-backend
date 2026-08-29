@@ -1,5 +1,11 @@
 const Order = require("../models/Order");
 const Counter = require("../models/Counter");
+const MenuItem = require("../models/MenuItem");
+const Combo = require("../models/Combo");
+const Offer = require("../models/Offer");
+const Table = require("../models/Table")
+const { verifyTableToken } = require("../utils/tableToken");
+const Restaurant = require("../models/Restaurant");
 const {
   // getIO,
   emitToRestaurant,
@@ -37,15 +43,179 @@ const generateReadableOrderId = async (restaurantId) => {
   }
 };
 
-const decodeTableToken = (token) => {
-  try {
-    const decoded = atob(token);
-    if (!decoded.includes("-TABLE-")) return "N/A";
-    return decoded.split("-TABLE-")[1];
-  } catch (e) {
-    return "N/A";
-  }
+// 🔒 Staff (Captain) apna table seedha dropdown se select karta hai — QR scan nahi karta.
+// Isliye signed-token ki zaroorat nahi; bas DB mein confirm karo ki table isi
+// restaurant ka hai aur active hai (cross-tenant/typo table-name se bachne ke liye).
+const resolveTableForStaff = async (tableNumber, restaurantId) => {
+  if (!tableNumber) return "N/A";
+
+  const clean = String(tableNumber).trim();
+  if (!clean) return "N/A";
+
+  const Table = require("../models/Table");
+  const table = await Table.findOne({
+    restaurantId,
+    tableNumber: clean,
+    isActive: true,
+  })
+    .select("_id")
+    .lean();
+
+  return table ? clean : "N/A";
 };
+
+// 🔒 Signed table token ko verify karke asli tableNumber nikalta hai.
+// Invalid/tampered/cross-tenant/expired (regenerated) token pe "N/A" return karta hai
+// — order ko orphan table pe attach hone se rokta hai.
+const resolveTableFromToken = async (token, restaurantId) => {
+  if (!token) return "N/A";
+
+  const result = verifyTableToken(token);
+  if (!result.valid) return "N/A"; // tampered/forged
+
+  if (String(result.restaurantId) !== String(restaurantId)) {
+    return "N/A"; // dusre tenant ka token — is restaurant ke liye invalid
+  }
+
+  const restaurant = await Restaurant.findById(restaurantId)
+    .select("qrTokenVersion")
+    .lean();
+  if (!restaurant) return "N/A";
+
+  if ((restaurant.qrTokenVersion || 0) !== result.tokenVersion) {
+    return "N/A"; // owner ne QR regenerate kar diya — purana QR ab invalid
+  }
+
+  return result.tableNumber;
+};
+
+// 🔒 Har item ka price/name/availability DB se verify karta hai — client ke
+// bheje price/name kabhi trust nahi karta. isCombo/MenuItem dono handle karta hai.
+// Return: { verifiedItems, computedSubtotal }
+const verifyAndPriceItems = async (rawItems, restaurantId) => {
+  if (!Array.isArray(rawItems) || rawItems.length === 0) {
+    const err = new Error("Order items are required");
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const verifiedItems = [];
+  let computedSubtotal = 0;
+
+  for (const rawItem of rawItems) {
+    const quantity = Number(rawItem.quantity);
+    if (!Number.isInteger(quantity) || quantity <= 0 || quantity > 50) {
+      const err = new Error("Invalid item quantity");
+      err.statusCode = 400;
+      throw err;
+    }
+
+    const isCombo = rawItem.itemType === "COMBO";
+    const Model = isCombo ? Combo : MenuItem;
+
+    const dbItem = await Model.findOne({
+      _id: rawItem.itemId,
+      restaurantId,
+      isAvailable: true,
+    }).lean();
+
+    if (!dbItem) {
+      const err = new Error(
+        `Item "${rawItem.name || rawItem.itemId}" is unavailable`,
+      );
+      err.statusCode = 400;
+      throw err;
+    }
+
+    const verifiedPrice = Number(dbItem.price); // 🔒 sirf DB ka price
+    computedSubtotal += verifiedPrice * quantity;
+
+    verifiedItems.push({
+      itemId: dbItem._id,
+      name: dbItem.name, // 🔒 DB se — client ka naam ignore
+      price: verifiedPrice, // 🔒 DB se — client ka price ignore
+      quantity,
+      itemType: isCombo ? "COMBO" : "SINGLE",
+      itemModel: isCombo ? "Combo" : "MenuItem",
+      notes: String(rawItem.notes || "")
+        .trim()
+        .slice(0, 200),
+    });
+  }
+
+  return { verifiedItems, computedSubtotal };
+};
+
+// 🔒 Active offers ke against server-side discount recompute karta hai —
+// PublicMenu.jsx jaisi hi "best matching offer per item" logic, taaki
+// discount feature same tarah kaam kare, bas client ka bheja discount trust
+// na ho. Return: { totalDiscount, itemDiscountMap }
+const computeVerifiedDiscount = async (verifiedItems, restaurantId) => {
+  const activeOffers = await Offer.find({
+    restaurantId,
+    isActive: true,
+  }).lean();
+
+  if (!activeOffers.length) {
+    return { totalDiscount: 0, itemDiscountMap: {} };
+  }
+
+  let totalDiscount = 0;
+  const itemDiscountMap = {};
+
+  for (const item of verifiedItems) {
+    const itemTotalPrice = item.price * item.quantity;
+
+    const applicableOffers = activeOffers.filter((offer) => {
+      const hasTargetItems = offer.targetItems && offer.targetItems.length > 0;
+      if (hasTargetItems) {
+        return offer.targetItems.some((t) => String(t) === String(item.itemId));
+      }
+      return true;
+    });
+
+    if (applicableOffers.length === 0) continue;
+
+    const targetedOffers = applicableOffers.filter(
+      (o) => o.targetItems && o.targetItems.length > 0,
+    );
+    const relevantOffers =
+      targetedOffers.length > 0 ? targetedOffers : applicableOffers;
+
+    const bestOffer = relevantOffers.reduce((best, o) =>
+      Number(o.discountValue) > Number(best.discountValue) ? o : best,
+    );
+
+    const itemDiscount = Math.round(
+      (itemTotalPrice * Number(bestOffer.discountValue)) / 100,
+    );
+
+    itemDiscountMap[String(item.itemId)] = itemDiscount;
+    totalDiscount += itemDiscount;
+  }
+
+  return { totalDiscount: Math.round(totalDiscount), itemDiscountMap };
+};
+
+// 🔒 verifiedItems + itemDiscountMap ko merge karke har item ka apna
+// `discount` field set karta hai — order-level total mein hi discount rakhna
+// kaafi nahi hai, warna cancelOrderItem baad mein galat recompute karega
+// (per-item discount hi single source of truth hai for later recalculation).
+const applyItemDiscounts = (verifiedItems, itemDiscountMap) =>
+  verifiedItems.map((item) => ({
+    ...item,
+    discount: itemDiscountMap[String(item.itemId)] || 0,
+  }));
+
+const sanitizeCustomerName = (value) =>
+  String(value || "")
+    .trim()
+    .slice(0, 60);
+
+const sanitizeCustomerPhone = (value) =>
+  String(value || "")
+    .replace(/\D/g, "")
+    .slice(0, 15);
 
 // @desc    Guest customer placing checkout cart objects
 // @route   POST /api/v1/orders/place
@@ -57,14 +227,11 @@ exports.placeOrder = async (req, res) => {
       customerPhone,
       orderType,
       items,
-      subtotal,
-      discount,
-      tax,
-      total,
       deliveryAddress,
       tableToken,
       mergeWithTable,
     } = req.body;
+
     // 🔴 IMPORTANT
     if (!restaurantId) {
       return res.status(400).json({
@@ -72,7 +239,45 @@ exports.placeOrder = async (req, res) => {
         message: "Restaurant ID is required to place order",
       });
     }
-    const decodedTable = decodeTableToken(tableToken);
+
+    // 🔒 Price/name/availability server-side verify — client ke numbers kabhi trust nahi
+    let verifiedItems, computedSubtotal;
+    try {
+      ({ verifiedItems, computedSubtotal } = await verifyAndPriceItems(
+        items,
+        restaurantId,
+      ));
+    } catch (verifyErr) {
+      return res.status(verifyErr.statusCode || 400).json({
+        success: false,
+        message: verifyErr.message,
+      });
+    }
+
+    // 🔒 Discount bhi server-side hi recompute — active offers ke against
+    const { totalDiscount: computedDiscount, itemDiscountMap } =
+      await computeVerifiedDiscount(verifiedItems, restaurantId);
+
+    // 🔑 FIX: har item ka apna discount bhi save karo — order-level total
+    // kaafi nahi hai, cancelOrderItem isi field se recalculate karta hai
+    const pricedItems = applyItemDiscounts(verifiedItems, itemDiscountMap);
+
+    const computedTax = 0; // abhi tax lagu nahi — koi tax-rate config nahi mila
+    const computedTotal = Math.max(
+      0,
+      computedSubtotal - computedDiscount + computedTax,
+    );
+
+    const decodedTable = await resolveTableFromToken(tableToken, restaurantId);
+
+    if (tableToken && decodedTable === "N/A") {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Invalid or expired table QR. Please rescan the table QR code.",
+      });
+    }
+
     const cleanMergeTable =
       mergeWithTable && String(mergeWithTable).trim()
         ? String(mergeWithTable).trim()
@@ -81,6 +286,9 @@ exports.placeOrder = async (req, res) => {
     const tablesInvolved = [decodedTable, cleanMergeTable].filter(
       (t) => t && t !== "N/A",
     );
+
+    const cleanCustomerName = sanitizeCustomerName(customerName);
+    const cleanCustomerPhone = sanitizeCustomerPhone(customerPhone);
 
     if (tablesInvolved.length) {
       // 1. Check karein ki kya is table par pehle se koi active/accepted/pending order hai
@@ -95,13 +303,13 @@ exports.placeOrder = async (req, res) => {
 
       if (existingOrder) {
         // 🚀 APPEND LOGIC: Naya order banane ki bajay items ko existing order mein push karein
-        existingOrder.items.push(...items);
+        existingOrder.items.push(...pricedItems);
         existingOrder.subtotal =
-          Number(existingOrder.subtotal) + Number(subtotal);
+          Number(existingOrder.subtotal) + computedSubtotal;
         existingOrder.discount =
-          Number(existingOrder.discount || 0) + Number(discount || 0); // 🆕 FIX: discount bhi merge hona chahiye
-        existingOrder.tax = Number(existingOrder.tax || 0) + Number(tax || 0);
-        existingOrder.total = Number(existingOrder.total) + Number(total);
+          Number(existingOrder.discount || 0) + computedDiscount; // 🆕 FIX: discount bhi merge hona chahiye
+        existingOrder.tax = Number(existingOrder.tax || 0) + computedTax;
+        existingOrder.total = Number(existingOrder.total) + computedTotal;
 
         // 🔑 FIX: taxRate ko combined (dono orders milakar) totals se dobara calculate karo
         // warna item-cancel karte waqt purana (sirf pehle order ka) taxRate use hoke total galat aayega
@@ -151,23 +359,23 @@ exports.placeOrder = async (req, res) => {
 
     // 🔑 FIX: taxRate ab discount ke baad ke taxable amount se calculate hoga
     // (cancelOrderItem bhi taxableAmount = subtotal - discount use karta hai — formula match hona chahiye)
-    const taxableAmount = Number(subtotal) - (Number(discount) || 0);
+    const taxableAmount = computedSubtotal - computedDiscount;
 
     const newOrder = await Order.create({
       restaurantId,
       orderId: uniqueOrderId,
-      customerName,
-      customerPhone,
+      customerName: cleanCustomerName,
+      customerPhone: cleanCustomerPhone,
       orderType,
       tableNumber: decodedTable || "N/A",
       mergedTables: cleanMergeTable ? [cleanMergeTable] : [],
       deliveryAddress: deliveryAddress || "",
-      items,
-      subtotal: Number(subtotal),
-      discount: Number(discount) || 0,
-      tax: Number(tax) || 0,
-      taxRate: taxableAmount > 0 ? (Number(tax) || 0) / taxableAmount : 0, // 🆕 FIX
-      total: Number(total),
+      items: pricedItems,
+      subtotal: computedSubtotal,
+      discount: computedDiscount,
+      tax: computedTax,
+      taxRate: taxableAmount > 0 ? computedTax / taxableAmount : 0, // 🆕 FIX
+      total: computedTotal,
     });
 
     // const io = getIO();
@@ -179,6 +387,7 @@ exports.placeOrder = async (req, res) => {
       order: newOrder,
     });
   } catch (error) {
+    console.error("Place Order Error:", error);
     res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -189,8 +398,6 @@ exports.placeOrder = async (req, res) => {
 // Counter POS API se completely separate
 // ============================================================
 
-// @desc    Captain placing customer order
-// @route   POST /api/v1/orders/captain-place
 // @desc    Captain placing customer order
 // @route   POST /api/v1/orders/captain-place
 exports.placeCaptainOrder = async (req, res) => {
@@ -237,12 +444,8 @@ exports.placeCaptainOrder = async (req, res) => {
       customerPhone,
       orderType,
       items,
-      subtotal,
-      discount,
-      tax,
-      total,
       deliveryAddress,
-      tableToken,
+      tableNumber,
       mergeWithTable,
     } = req.body;
 
@@ -265,11 +468,49 @@ exports.placeCaptainOrder = async (req, res) => {
     }
 
     // =========================================================
+    // 🔒 PRICE / AVAILABILITY VERIFICATION
+    // Same trust-boundary as /place — captain ka bheja price bhi
+    // ignore hota hai, DB se hi source of truth aata hai.
+    // =========================================================
+
+    let verifiedItems, computedSubtotal;
+    try {
+      ({ verifiedItems, computedSubtotal } = await verifyAndPriceItems(
+        items,
+        restaurantId,
+      ));
+    } catch (verifyErr) {
+      return res.status(verifyErr.statusCode || 400).json({
+        success: false,
+        message: verifyErr.message,
+      });
+    }
+
+    const { totalDiscount: computedDiscount, itemDiscountMap } =
+      await computeVerifiedDiscount(verifiedItems, restaurantId);
+
+    // 🔑 FIX: per-item discount save karo (placeOrder jaisa hi)
+    const pricedItems = applyItemDiscounts(verifiedItems, itemDiscountMap);
+
+    const computedTax = 0;
+    const computedTotal = Math.max(
+      0,
+      computedSubtotal - computedDiscount + computedTax,
+    );
+
+    // =========================================================
     // TABLE TOKEN
     // EXACT SAME LOGIC AS placeOrder
     // =========================================================
 
-    const decodedTable = decodeTableToken(tableToken);
+    const decodedTable = await resolveTableForStaff(tableNumber, restaurantId);
+
+    if (tableNumber && decodedTable === "N/A") {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid or expired table QR.",
+      });
+    }
 
     const cleanMergeTable =
       mergeWithTable && String(mergeWithTable).trim()
@@ -310,18 +551,17 @@ exports.placeCaptainOrder = async (req, res) => {
         // APPEND ITEMS
         // -----------------------------------------------
 
-        existingOrder.items.push(...items);
+        existingOrder.items.push(...pricedItems);
 
         existingOrder.subtotal =
-          Number(existingOrder.subtotal || 0) + Number(subtotal || 0);
+          Number(existingOrder.subtotal || 0) + computedSubtotal;
 
         existingOrder.discount =
-          Number(existingOrder.discount || 0) + Number(discount || 0);
+          Number(existingOrder.discount || 0) + computedDiscount;
 
-        existingOrder.tax = Number(existingOrder.tax || 0) + Number(tax || 0);
+        existingOrder.tax = Number(existingOrder.tax || 0) + computedTax;
 
-        existingOrder.total =
-          Number(existingOrder.total || 0) + Number(total || 0);
+        existingOrder.total = Number(existingOrder.total || 0) + computedTotal;
 
         // -----------------------------------------------
         // RECALCULATE TAX RATE
@@ -339,12 +579,15 @@ exports.placeCaptainOrder = async (req, res) => {
         // CUSTOMER DETAILS
         // -----------------------------------------------
 
-        if (customerName && String(customerName).trim()) {
-          existingOrder.customerName = String(customerName).trim();
+        const cleanCustomerName = sanitizeCustomerName(customerName);
+        const cleanCustomerPhone = sanitizeCustomerPhone(customerPhone);
+
+        if (cleanCustomerName) {
+          existingOrder.customerName = cleanCustomerName;
         }
 
-        if (customerPhone && String(customerPhone).trim()) {
-          existingOrder.customerPhone = String(customerPhone).trim();
+        if (cleanCustomerPhone) {
+          existingOrder.customerPhone = cleanCustomerPhone;
         }
 
         // -----------------------------------------------
@@ -403,36 +646,25 @@ exports.placeCaptainOrder = async (req, res) => {
     // TAX RATE
     // =========================================================
 
-    const numericSubtotal = Number(subtotal) || 0;
+    const taxableAmount = Math.max(0, computedSubtotal - computedDiscount);
 
-    const numericDiscount = Number(discount) || 0;
-
-    const numericTax = Number(tax) || 0;
-
-    const numericTotal = Number(total) || 0;
-
-    const taxableAmount = Math.max(0, numericSubtotal - numericDiscount);
-
-    const taxRate = taxableAmount > 0 ? numericTax / taxableAmount : 0;
+    const taxRate = taxableAmount > 0 ? computedTax / taxableAmount : 0;
 
     // =========================================================
     // CREATE CAPTAIN ORDER
     // =========================================================
+
+    const cleanCustomerName = sanitizeCustomerName(customerName);
+    const cleanCustomerPhone = sanitizeCustomerPhone(customerPhone);
 
     const newOrder = await Order.create({
       restaurantId,
 
       orderId: uniqueOrderId,
 
-      customerName:
-        customerName && String(customerName).trim()
-          ? String(customerName).trim()
-          : "Captain Walk-in",
+      customerName: cleanCustomerName || "Captain Walk-in",
 
-      customerPhone:
-        customerPhone && String(customerPhone).trim()
-          ? String(customerPhone).trim()
-          : "0000000000",
+      customerPhone: cleanCustomerPhone || "0000000000",
 
       orderType,
 
@@ -444,17 +676,17 @@ exports.placeCaptainOrder = async (req, res) => {
 
       deliveryAddress: deliveryAddress || "",
 
-      items,
+      items: pricedItems,
 
-      subtotal: numericSubtotal,
+      subtotal: computedSubtotal,
 
-      discount: numericDiscount,
+      discount: computedDiscount,
 
-      tax: numericTax,
+      tax: computedTax,
 
       taxRate,
 
-      total: numericTotal,
+      total: computedTotal,
 
       status: "PENDING",
     });
@@ -493,21 +725,54 @@ exports.placeCounterOrder = async (req, res) => {
   try {
     // 🔑 restaurantId req.user se lein agar req.body mein na ho
     const restaurantId = req.user?.restaurantId;
-    const {
-      orderType,
-      items,
-      subtotal,
-      discount,
-      tax,
-      total,
-      targetTableNumber,
-    } = req.body;
+    const { orderType, items, targetTableNumber } = req.body;
 
     if (!restaurantId) {
       return res
         .status(400)
         .json({ success: false, message: "Restaurant ID is required" });
     }
+
+    if (!Array.isArray(items) || items.length === 0) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Order items are required" });
+    }
+
+    // 🔒 Yahan bhi client ka bheja price/subtotal/total trust nahi karte —
+    // staff-facing POS hone ke bawajood, galat click/tampering se restaurant
+    // ka loss ho sakta hai. Payload shape thoda alag hai (menuItem/combo/itemId,
+    // catalogType) isliye pehle common shape mein normalize karte hain.
+    const normalizedRawItems = items.map((i) => ({
+      itemId: i.menuItem || i.combo || i.itemId,
+      itemType: i.catalogType === "COMBO" ? "COMBO" : "SINGLE",
+      quantity: i.quantity,
+      notes: i.notes,
+    }));
+
+    let verifiedItems, computedSubtotal;
+    try {
+      ({ verifiedItems, computedSubtotal } = await verifyAndPriceItems(
+        normalizedRawItems,
+        restaurantId,
+      ));
+    } catch (verifyErr) {
+      return res.status(verifyErr.statusCode || 400).json({
+        success: false,
+        message: verifyErr.message,
+      });
+    }
+
+    const { totalDiscount: computedDiscount, itemDiscountMap } =
+      await computeVerifiedDiscount(verifiedItems, restaurantId);
+
+    const pricedItems = applyItemDiscounts(verifiedItems, itemDiscountMap);
+
+    const computedTax = 0;
+    const computedTotal = Math.max(
+      0,
+      computedSubtotal - computedDiscount + computedTax,
+    );
 
     // 1. Agar targetTableNumber diya hai (Dine-in counter item addition)
     if (orderType === "DINE_IN_COUNTER" && targetTableNumber) {
@@ -520,28 +785,17 @@ exports.placeCounterOrder = async (req, res) => {
       });
 
       if (existingOrder) {
-        // Map frontend items to match schema requirements if necessary
-        const formattedItems = items.map((i) => ({
-          itemId: i.menuItem || i.combo || i.itemId,
-          itemType: i.catalogType === "COMBO" ? "COMBO" : "SINGLE",
-          name: i.name,
-          price: i.price,
-          quantity: i.quantity,
-          itemModel: i.itemModel || "MenuItem",
-          discount: Number(i.discount) || 0,
-        }));
-
-        existingOrder.items.push(...formattedItems);
+        existingOrder.items.push(...pricedItems);
         existingOrder.subtotal =
-          Number(existingOrder.subtotal) + Number(subtotal);
+          Number(existingOrder.subtotal) + computedSubtotal;
         existingOrder.discount =
-          Number(existingOrder.discount || 0) + Number(discount || 0);
-        existingOrder.tax = Number(existingOrder.tax || 0) + Number(tax || 0);
+          Number(existingOrder.discount || 0) + computedDiscount;
+        existingOrder.tax = Number(existingOrder.tax || 0) + computedTax;
 
         const combinedTaxable = existingOrder.subtotal - existingOrder.discount;
         existingOrder.taxRate =
           combinedTaxable > 0 ? existingOrder.tax / combinedTaxable : 0;
-        existingOrder.total = Number(existingOrder.total) + Number(total);
+        existingOrder.total = Number(existingOrder.total) + computedTotal;
 
         await existingOrder.save();
 
@@ -570,19 +824,9 @@ exports.placeCounterOrder = async (req, res) => {
       }
     }
 
-    // 2. Format items for Parcel / New Counter Order
-    const formattedItems = items.map((i) => ({
-      itemId: i.menuItem || i.combo || i.itemId,
-      itemType: i.catalogType === "COMBO" ? "COMBO" : "SINGLE",
-      name: i.name,
-      price: i.price,
-      quantity: i.quantity,
-      itemModel: i.itemModel || "MenuItem",
-      discount: Number(i.discount) || 0,
-    }));
-
+    // 2. New Counter Order / Parcel
     const uniqueOrderId = await generateReadableOrderId(restaurantId);
-    const taxableAmount = Number(subtotal) - (Number(discount) || 0);
+    const taxableAmount = computedSubtotal - computedDiscount;
 
     const newOrder = await Order.create({
       restaurantId,
@@ -591,12 +835,12 @@ exports.placeCounterOrder = async (req, res) => {
       customerPhone: "",
       orderType: "TAKEAWAY", // 🔑 Schema-compatible enum value (change to match your Order schema's enum)
       tableNumber: "PARCEL",
-      items: formattedItems,
-      subtotal: Number(subtotal),
-      discount: Number(discount) || 0,
-      tax: Number(tax) || 0,
-      taxRate: taxableAmount > 0 ? (Number(tax) || 0) / taxableAmount : 0,
-      total: Number(total),
+      items: pricedItems,
+      subtotal: computedSubtotal,
+      discount: computedDiscount,
+      tax: computedTax,
+      taxRate: taxableAmount > 0 ? computedTax / taxableAmount : 0,
+      total: computedTotal,
       status: "PENDING",
     });
 
@@ -1083,7 +1327,6 @@ exports.cancelOrderItem = async (req, res) => {
     }
 
     // Cancel item
-    // Cancel item
     item.status = "REJECTED";
 
     // Remaining active items
@@ -1268,25 +1511,25 @@ exports.updateDueCustomerDetails = async (req, res) => {
       });
     }
 
-    const cleanName = String(customerName || "").trim();
-    const cleanPhone = String(customerPhone || "").trim();
+    const cleanCustomerName = sanitizeCustomerName(customerName);
+    const cleanCustomerPhone = sanitizeCustomerPhone(customerPhone);
 
-    if (!cleanName) {
+    if (!cleanCustomerName) {
       return res.status(400).json({
         success: false,
         message: "Customer name is required",
       });
     }
 
-    if (cleanPhone && !/^\d{10}$/.test(cleanPhone)) {
+    if (cleanCustomerPhone && !/^\d{10}$/.test(cleanCustomerPhone)) {
       return res.status(400).json({
         success: false,
         message: "Mobile number must be exactly 10 digits",
       });
     }
 
-    order.customerName = cleanName;
-    order.customerPhone = cleanPhone;
+    order.customerName = cleanCustomerName;
+    order.customerPhone = cleanCustomerPhone;
 
     await order.save();
 

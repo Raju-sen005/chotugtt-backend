@@ -10,6 +10,7 @@ const {
   addAdminTable,
   toggleTableStatus,
   removeAdminTable,
+  regenerateAllTableTokens,
   moveTableSection,
 } = require("../controllers/Tablecontroller");
 
@@ -35,6 +36,14 @@ const TABLE_WRITE_ROLES = ["OWNER", "MANAGER"];
 router.get(
   "/public/:restaurantId",
   getPublicFreeTables
+);
+
+router.post(
+  "/admin/regenerate-tokens",
+  protect,
+  authorize("OWNER"),
+  tenantContext,
+  regenerateAllTableTokens
 );
 
 router.get(

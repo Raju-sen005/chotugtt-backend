@@ -51,10 +51,32 @@ const userSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+
+    legalAgreement: {
+      termsAccepted: {
+        type: Boolean,
+        default: false,
+      },
+
+      privacyPolicyAccepted: {
+        type: Boolean,
+        default: false,
+      },
+
+      ownerAgreementAccepted: {
+        type: Boolean,
+        default: false,
+      },
+
+      acceptedAt: {
+        type: Date,
+        default: null,
+      },
+    },
   },
   {
     timestamps: true,
-  }
+  },
 );
 
 // Password hashing

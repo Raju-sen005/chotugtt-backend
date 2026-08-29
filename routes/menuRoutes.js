@@ -15,6 +15,7 @@ const {
 } = require("../controllers/menuController");
 const { protect, authorize } = require("../middleware/auth");
 const tenantContext = require("../middleware/tenant");
+const requireApprovedRestaurant = require("../middleware/requireApprovedRestaurant"); // 🔑 naya import
 
 // 🔑 Multer middleware import karein (Apne project ke path ke hisaab se adjust karein)
 const upload = require("../middleware/upload"); // ya jahan bhi aapne multer configure kiya hai
@@ -24,7 +25,7 @@ router.use("/admin", protect, authorize("OWNER", "MANAGER"), tenantContext);
 
 router
   .route("/admin/items")
-  .post(upload.single("image"), createMenuItem) // 🔑 Yahan upload.single('image') joda gaya hai
+  .post(requireApprovedRestaurant, upload.single("image"), createMenuItem) // 🔑 Yahan upload.single('image') joda gaya hai
   .get(getAdminMenuItems);
 
 router.get(
@@ -40,7 +41,12 @@ router
   .patch(upload.single("image"), updateMenuItem) // 🔑 Yahan bhi upload middleware add kiya
   .delete(deleteMenuItem);
 
-router.post("/admin/combos", upload.single("image"), createCombo); // 🔑 Combo ke liye bhi
+router.post(
+  "/admin/combos",
+  requireApprovedRestaurant,
+  upload.single("image"),
+  createCombo,
+); // 🔑 Combo ke liye bhi
 router.get("/admin/combos", getAdminCombos);
 
 router.post(

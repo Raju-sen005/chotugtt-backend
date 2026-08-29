@@ -42,9 +42,23 @@ const generateTokenAndSetCookie = (res, userId) => {
 // @desc    Register a new Restaurant (Tenant) & Owner
 // @route   POST /api/v1/auth/register
 exports.registerTenant = async (req, res) => {
-  const { restaurantName, slug, name, email, password, phone } = req.body;
+  const { restaurantName, slug, name, email, password, phone, legalAgreement } =
+    req.body;
   console.log("REQ.FILE:", req.file); // Yeh check karne ke liye ki multer file utha raha hai ya nahi
   console.log("REQ.BODY:", req.body);
+  let parsedLegalAgreement = legalAgreement;
+
+  if (typeof parsedLegalAgreement === "string") {
+    try {
+      parsedLegalAgreement = JSON.parse(parsedLegalAgreement);
+    } catch (error) {
+      return res.status(400).json({
+        success: false,
+        code: "INVALID_LEGAL_AGREEMENT",
+        message: "Invalid legal agreement data.",
+      });
+    }
+  }
   try {
     // 1. Safe slug generation & validation
     const finalSlug =
@@ -89,6 +103,26 @@ exports.registerTenant = async (req, res) => {
       });
     }
 
+    // =====================================================
+    // LEGAL AGREEMENT VALIDATION
+    // =====================================================
+
+    const isTrue = (value) => value === true || value === "true";
+
+    if (
+      !parsedLegalAgreement ||
+      !isTrue(parsedLegalAgreement.termsAccepted) ||
+      !isTrue(parsedLegalAgreement.privacyPolicyAccepted) ||
+      !isTrue(parsedLegalAgreement.ownerAgreementAccepted)
+    ) {
+      return res.status(400).json({
+        success: false,
+        code: "LEGAL_AGREEMENT_REQUIRED",
+        message:
+          "You must read and agree to the Terms & Conditions, Privacy Policy, and Owner Agreement before creating your account.",
+      });
+    }
+
     let logoUrl = "";
 
     // 🖼️ Agar file aayi hai, toh local file ka path ya relative URL save karein
@@ -130,6 +164,12 @@ exports.registerTenant = async (req, res) => {
       email,
       password,
       role: "OWNER",
+      legalAgreement: {
+        termsAccepted: true,
+        privacyPolicyAccepted: true,
+        ownerAgreementAccepted: true,
+        acceptedAt: new Date(),
+      },
     });
 
     generateTokenAndSetCookie(res, user._id);
