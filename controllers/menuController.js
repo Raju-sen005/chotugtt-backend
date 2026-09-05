@@ -124,6 +124,14 @@ function createImageFetcher() {
   };
 }
 
+/** multipart/form-data se aane wala isVeg string ho sakta hai ("true"/"false") ya boolean —
+ *  dono handle karo, missing/invalid hone par undefined return karo (caller default lagayega). */
+const parseIsVeg = (value) => {
+  if (value === undefined || value === null || value === "") return undefined;
+  if (typeof value === "boolean") return value;
+  return String(value).toLowerCase() === "true";
+};
+
 /** Ek AI-extracted raw item ko safe, sanitized shape mein normalize karta hai. */
 function sanitizeExtractedItem(raw) {
   const name =
@@ -200,6 +208,7 @@ exports.createMenuItem = async (req, res) => {
     const description = String(req.body?.description || "").trim();
 
     const price = Number(req.body?.price);
+    const isVeg = parseIsVeg(req.body?.isVeg); // 🆕
 
     if (!name) {
       return res.status(400).json({
@@ -237,6 +246,7 @@ exports.createMenuItem = async (req, res) => {
       category,
       description,
       price,
+      isVeg: isVeg === undefined ? true : isVeg, // 🆕 default true agar bheja hi na ho
       image: imageUrl,
     });
 
@@ -370,6 +380,7 @@ Do not include any text before or after the JSON array.`,
         description: item.description || "Delicious freshly prepared dish.",
         price: item.price,
         image: await fetchDishImage(item.name),
+        isVeg: true,
         isAvailable: true,
       })),
     );
@@ -419,6 +430,14 @@ Do not include any text before or after the JSON array.`,
     });
   } catch (error) {
     console.error("AI Menu Extraction Error:", error);
+    console.error("========== GEMINI AI ERROR ==========");
+    console.error("Message:", error?.message);
+    console.error("Status:", error?.status);
+    console.error("Code:", error?.code);
+    console.error("Name:", error?.name);
+    console.error("Details:", error?.details);
+    console.error("Full Error:", error);
+    console.error("====================================");
 
     const status = Number(error?.status);
 
@@ -655,6 +674,14 @@ exports.updateMenuItem = async (req, res) => {
         req.body.isAvailable === true || req.body.isAvailable === "true";
     }
 
+    if (req.body?.isVeg !== undefined) {
+      // 🆕
+      const parsedIsVeg = parseIsVeg(req.body.isVeg);
+      if (parsedIsVeg !== undefined) {
+        updates.isVeg = parsedIsVeg;
+      }
+    }
+
     if (req.file) {
       updates.image = await uploadBufferToCloudinary(
         req.file.buffer,
@@ -781,7 +808,7 @@ exports.createCombo = async (req, res) => {
         message: "Restaurant context is missing",
       });
     }
-    const { name, description, items, price, discount } = req.body;
+    const { name, description, items, price, discount, isVeg } = req.body;
 
     let imageUrl = "";
     if (req.file) {
@@ -791,6 +818,8 @@ exports.createCombo = async (req, res) => {
       );
     }
 
+    const parsedIsVeg = parseIsVeg(isVeg); // 🆕
+
     const combo = await Combo.create({
       restaurantId,
       name,
@@ -798,6 +827,8 @@ exports.createCombo = async (req, res) => {
       items: typeof items === "string" ? JSON.parse(items) : items,
       price,
       discount,
+      isVeg: parsedIsVeg === undefined ? true : parsedIsVeg, // 🆕
+
       category: "COMBO",
       image: imageUrl,
     });
@@ -873,6 +904,8 @@ exports.updateCombo = async (req, res) => {
       "price",
       "discount",
       "items",
+      "isVeg", // 🆕
+
       "isAvailable",
     ];
     const updates = {};

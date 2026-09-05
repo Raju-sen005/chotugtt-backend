@@ -49,7 +49,6 @@ exports.createRoom = async (req, res) => {
       description,
     });
 
-    // Broadcast room update via Socket.io
     emitToRestaurant(restaurantId, "ROOMS_UPDATED", { action: "CREATE", data: room });
 
     res.status(201).json({
@@ -93,19 +92,16 @@ exports.updateRoom = async (req, res) => {
 };
 
 // Delete room
-// Delete room
 exports.deleteRoom = async (req, res) => {
   try {
     const restaurantId = req.user.restaurantId;
     const { roomId } = req.params;
 
-    // Find the room first to verify its status
     const room = await Room.findOne({ _id: roomId, restaurantId });
     if (!room) {
       return res.status(404).json({ success: false, message: "Room not found" });
     }
 
-    // Check if the room is currently booked or occupied
     if (room.status === "Booked" || room.status === "Occupied") {
       return res.status(400).json({
         success: false,
@@ -113,7 +109,6 @@ exports.deleteRoom = async (req, res) => {
       });
     }
 
-    // Proceed with deletion if the room is available
     await Room.findOneAndDelete({ _id: roomId, restaurantId });
 
     emitToRestaurant(restaurantId, "ROOMS_UPDATED", { action: "DELETE", roomId });
@@ -144,7 +139,6 @@ exports.createBooking = async (req, res) => {
       return res.status(400).json({ success: false, message: "All required booking fields must be provided" });
     }
 
-    // Verify room belongs to tenant and is available
     const room = await Room.findOne({ _id: roomId, restaurantId });
     if (!room) {
       return res.status(404).json({ success: false, message: "Target room not found" });
@@ -154,7 +148,6 @@ exports.createBooking = async (req, res) => {
       return res.status(400).json({ success: false, message: "Room is currently occupied or under maintenance" });
     }
 
-    // Create the booking record
     const booking = await RoomBooking.create({
       restaurantId,
       roomId,
@@ -168,11 +161,9 @@ exports.createBooking = async (req, res) => {
       bookedBy: req.user._id,
     });
 
-    // Update room status to Occupied
     room.status = "Occupied";
     await room.save();
 
-    // Broadcast update to tenant sockets
     emitToRestaurant(restaurantId, "ROOM_BOOKING_CREATED", { booking, room });
 
     res.status(201).json({
@@ -202,6 +193,79 @@ exports.getBookings = async (req, res) => {
     });
   } catch (error) {
     console.error("❌ Get bookings error:", error.message);
+    res.status(500).json({ success: false, message: "Internal server error" });
+  }
+};
+
+/*
+ * --------------------------------------------------
+ * NEW CONTROLLERS FOR FRONTEND FIX (explore.tsx)
+ * --------------------------------------------------
+ */
+
+// Get current active booking for a specific room
+exports.getCurrentBooking = async (req, res) => {
+  try {
+    const restaurantId = req.user.restaurantId;
+    const { id } = req.params; // roomId
+
+    const room = await Room.findOne({ _id: id, restaurantId });
+    if (!room) {
+      return res.status(404).json({ success: false, message: "Room not found" });
+    }
+
+    // Find active/latest booking for this room
+    const booking = await RoomBooking.findOne({ 
+      restaurantId, 
+      roomId: id, 
+      status: { $ne: "Completed" } 
+    }).sort({ createdAt: -1 });
+
+    if (!booking) {
+      return res.status(404).json({ success: false, message: "No active booking found for this room" });
+    }
+
+    res.status(200).json({
+      success: true,
+      data: booking,
+    });
+  } catch (error) {
+    console.error("❌ Get current booking error:", error.message);
+    res.status(500).json({ success: false, message: "Internal server error" });
+  }
+};
+
+// Checkout guest and free up the room
+exports.checkoutRoom = async (req, res) => {
+  try {
+    const restaurantId = req.user.restaurantId;
+    const { id } = req.params; // roomId
+
+    const room = await Room.findOne({ _id: id, restaurantId });
+    if (!room) {
+      return res.status(404).json({ success: false, message: "Room not found" });
+    }
+
+    // Update active booking status to Completed
+    const booking = await RoomBooking.findOneAndUpdate(
+      { restaurantId, roomId: id, status: { $ne: "Completed" } },
+      { status: "Completed", checkOutDate: new Date() },
+      { new: true }
+    );
+
+    // Free up room status
+    room.status = "Available";
+    await room.save();
+
+    emitToRestaurant(restaurantId, "ROOMS_UPDATED", { action: "CHECKOUT", data: room });
+
+    res.status(200).json({
+      success: true,
+      message: "Checkout successful, room is now available",
+      data: { room, booking },
+    });
+  } catch (error) {
+    console.error("❌ Checkout room error:", error.message);
     res.status(500).json({ success: false, message: "Internal server error" });
   }
 };
